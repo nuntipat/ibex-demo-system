@@ -146,11 +146,23 @@ module shufflev_prefetch_buffer #(
 
     ibex_prefetch_buffer_ready_i = 1'b0;
 
+    // remove entry from the instruction buffer after it was sent to the ID/EX stage. we should remove the instruction first before adding a new one 
+    // as start_ptr and end_ptr may point to the same entry and the valid bit should end up being set when we remove and add instruction in the same cycle
+    if (ready_i && valid_o) begin
+      inst_buffer_valid_d[inst_buffer_start_ptr_q] = 1'b0;
+      inst_buffer_start_ptr_d = inst_buffer_start_ptr_q + 'd1;
+      if (inst_buffer_start_ptr_d == DEPTH_NUM_BIT'(DEPTH)) begin
+        inst_buffer_start_ptr_d = 'd0;
+      end
+    end
+
     // retrieve new instruction from the prefetch buffer when the prefetch buffer has valid data, the instruction buffer is not full and `discard_prefetch_buffer_q` is not asserted
-    // we ignore `discard_prefetch_buffer_q` when `latest_branch_not_taken` is asserted to avoid waiting for `discard_prefetch_buffer_q` to be deasserted in the next clock cycle
-    // this additional or-gate is optional but can help improve performance
+    // Note:
+    // - we still accept new instruction when the instruction buffer is full if one entry is being removed (ready_i and valid_o are both asserted)
+    // - we ignore `discard_prefetch_buffer_q` when `latest_branch_not_taken` is asserted to avoid waiting for `discard_prefetch_buffer_q` to be deasserted in the next clock cycle
+    //   this additional or-gate is optional but can help improve performance
     // TODO: test the case when branch_i is assert due to exception or interrupt
-    if (!branch_i && ibex_prefetch_buffer_valid_o && !inst_buffer_full && (!discard_prefetch_buffer_q || latest_branch_not_taken)) begin
+    if (!branch_i && ibex_prefetch_buffer_valid_o && (!inst_buffer_full || (ready_i && valid_o)) && (!discard_prefetch_buffer_q || latest_branch_not_taken)) begin
       ibex_prefetch_buffer_ready_i = 1'b1;
       inst_buffer_addr_d[inst_buffer_end_ptr_q] = ibex_prefetch_buffer_addr_o;
       inst_buffer_data_d[inst_buffer_end_ptr_q] = ibex_prefetch_buffer_rdata_o;
@@ -160,19 +172,10 @@ module shufflev_prefetch_buffer #(
         inst_buffer_end_ptr_d = 'd0;
       end
     end
-
-    // remove entry from the instruction buffer after it was sent to the ID/EX stage
-    if (ready_i && inst_buffer_not_empty) begin
-      inst_buffer_valid_d[inst_buffer_start_ptr_q] = 1'b0;
-      inst_buffer_start_ptr_d = inst_buffer_start_ptr_q + 'd1;
-      if (inst_buffer_start_ptr_d == DEPTH_NUM_BIT'(DEPTH)) begin
-        inst_buffer_start_ptr_d = 'd0;
-      end
-    end
   end
 
   // other outputs to the ID/EX stage
-  assign valid_o = inst_buffer_not_empty;
+  assign valid_o = inst_buffer_full || (inst_buffer_not_empty && discard_prefetch_buffer_q);  // instruction buffer may not be full if we are currently awaiting branch outcome
   assign rdata_o = inst_buffer_data_q[inst_buffer_start_ptr_q];
   assign addr_o = inst_buffer_addr_q[inst_buffer_start_ptr_q];
   assign err_o = 1'b0;
