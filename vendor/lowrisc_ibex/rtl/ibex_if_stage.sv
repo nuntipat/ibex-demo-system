@@ -311,7 +311,7 @@ module ibex_if_stage import ibex_pkg::*; #(
     );
   end else begin : gen_prefetch_buffer
     // prefetch buffer, caches a fixed number of instructions
-    ibex_prefetch_buffer #(
+    shufflev_prefetch_buffer #(
       .ResetAll        (ResetAll)
     ) prefetch_buffer_i (
         .clk_i               ( clk_i                      ),
