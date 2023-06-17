@@ -134,6 +134,7 @@ module ibex_if_stage import ibex_pkg::*; #(
 
   logic              fetch_valid_raw;
   logic              fetch_valid;
+  logic              fetch_is_compress; // TODO: add check as we don't support ICache with ShuffleV at the moment 
   logic              fetch_ready;
   logic       [31:0] fetch_rdata;
   logic       [31:0] fetch_addr;
@@ -324,6 +325,7 @@ module ibex_if_stage import ibex_pkg::*; #(
 
         .ready_i             ( fetch_ready                ),
         .valid_o             ( fetch_valid_raw            ),
+        .is_compress_o       ( fetch_is_compress          ),
         .rdata_o             ( fetch_rdata                ),
         .addr_o              ( fetch_addr                 ),
         .err_o               ( fetch_err                  ),
@@ -400,15 +402,9 @@ module ibex_if_stage import ibex_pkg::*; #(
   //
   // since it does not matter where we decompress instructions, we do it here
   // to ease timing closure
-  ibex_compressed_decoder compressed_decoder_i (
-    .clk_i          (clk_i),
-    .rst_ni         (rst_ni),
-    .valid_i        (fetch_valid & ~fetch_err),
-    .instr_i        (if_instr_rdata),
-    .instr_o        (instr_decompressed),
-    .is_compressed_o(instr_is_compressed),
-    .illegal_instr_o(illegal_c_insn)
-  );
+  assign instr_decompressed = if_instr_rdata;
+  assign instr_is_compressed = fetch_is_compress;
+  assign illegal_c_insn = 1'b0; // TODO: handling error
 
   // Dummy instruction insertion
   if (DummyInstructions) begin : gen_dummy_instr
