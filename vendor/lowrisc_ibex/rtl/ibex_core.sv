@@ -42,7 +42,8 @@ module ibex_core import ibex_pkg::*; #(
   parameter bit          MemECC            = 1'b0,
   parameter int unsigned MemDataWidth      = MemECC ? 32 + 7 : 32,
   parameter int unsigned DmHaltAddr        = 32'h1A110800,
-  parameter int unsigned DmExceptionAddr   = 32'h1A110808
+  parameter int unsigned DmExceptionAddr   = 32'h1A110808,
+  parameter int unsigned NumPhysicalRegs   = 64
 ) (
   // Clock and Reset
   input  logic                         clk_i,
@@ -73,9 +74,9 @@ module ibex_core import ibex_pkg::*; #(
   // Register file interface
   output logic                         dummy_instr_id_o,
   output logic                         dummy_instr_wb_o,
-  output logic [4:0]                   rf_raddr_a_o,
-  output logic [4:0]                   rf_raddr_b_o,
-  output logic [4:0]                   rf_waddr_wb_o,
+  output logic [$clog2(NumPhysicalRegs)-1:0]                   rf_raddr_a_o,
+  output logic [$clog2(NumPhysicalRegs)-1:0]                   rf_raddr_b_o,
+  output logic [$clog2(NumPhysicalRegs)-1:0]                   rf_waddr_wb_o,
   output logic                         rf_we_wb_o,
   output logic [RegFileDataWidth-1:0]  rf_wdata_wb_ecc_o,
   input  logic [RegFileDataWidth-1:0]  rf_rdata_a_ecc_i,
@@ -172,6 +173,9 @@ module ibex_core import ibex_pkg::*; #(
   logic [31:0] instr_rdata_alu_id;             // Instruction sampled inside IF stage (replicated to
                                                // ease fan-out)
   logic [15:0] instr_rdata_c_id;               // Compressed instruction sampled inside IF stage
+  logic [$clog2(NumPhysicalRegs)-1:0] instr_rdata_rd_id; 
+  logic [$clog2(NumPhysicalRegs)-1:0] instr_rdata_rs1_id; 
+  logic [$clog2(NumPhysicalRegs)-1:0] instr_rdata_rs2_id; 
   logic        instr_is_compressed_id;
   logic        instr_perf_count_id;
   logic        instr_bp_taken_id;
@@ -225,13 +229,13 @@ module ibex_core import ibex_pkg::*; #(
   logic        lsu_busy;
 
   // Register File
-  logic [4:0]  rf_raddr_a;
+  logic [$clog2(NumPhysicalRegs)-1:0]  rf_raddr_a;
   logic [31:0] rf_rdata_a;
-  logic [4:0]  rf_raddr_b;
+  logic [$clog2(NumPhysicalRegs)-1:0]  rf_raddr_b;
   logic [31:0] rf_rdata_b;
   logic        rf_ren_a;
   logic        rf_ren_b;
-  logic [4:0]  rf_waddr_wb;
+  logic [$clog2(NumPhysicalRegs)-1:0]  rf_waddr_wb;
   logic [31:0] rf_wdata_wb;
   // Writeback register write data that can be used on the forwarding path (doesn't factor in memory
   // read data as this is too late for the forwarding path)
@@ -241,7 +245,7 @@ module ibex_core import ibex_pkg::*; #(
   logic        rf_we_lsu;
   logic        rf_ecc_err_comb;
 
-  logic [4:0]  rf_waddr_id;
+  logic [$clog2(NumPhysicalRegs)-1:0]  rf_waddr_id;
   logic [31:0] rf_wdata_id;
   logic        rf_we_id;
   logic        rf_rd_a_wb_match;
@@ -418,7 +422,8 @@ module ibex_core import ibex_pkg::*; #(
     .RndCnstLfsrPerm  (RndCnstLfsrPerm),
     .BranchPredictor  (BranchPredictor),
     .MemECC           (MemECC),
-    .MemDataWidth     (MemDataWidth)
+    .MemDataWidth     (MemDataWidth),
+    .NumPhysicalRegs(NumPhysicalRegs)
   ) if_stage_i (
     .clk_i (clk_i),
     .rst_ni(rst_ni),
@@ -454,6 +459,9 @@ module ibex_core import ibex_pkg::*; #(
     .instr_rdata_id_o        (instr_rdata_id),
     .instr_rdata_alu_id_o    (instr_rdata_alu_id),
     .instr_rdata_c_id_o      (instr_rdata_c_id),
+    .instr_rdata_rd_id_o     (instr_rdata_rd_id),
+    .instr_rdata_rs1_id_o    (instr_rdata_rs1_id), 
+    .instr_rdata_rs2_id_o    (instr_rdata_rs2_id),
     .instr_is_compressed_id_o(instr_is_compressed_id),
     .instr_bp_taken_o        (instr_bp_taken_id),
     .instr_fetch_err_o       (instr_fetch_err),
@@ -535,7 +543,8 @@ module ibex_core import ibex_pkg::*; #(
     .DataIndTiming  (DataIndTiming),
     .WritebackStage (WritebackStage),
     .BranchPredictor(BranchPredictor),
-    .MemECC         (MemECC)
+    .MemECC         (MemECC),
+    .NumPhysicalRegs(NumPhysicalRegs)
   ) id_stage_i (
     .clk_i (clk_i),
     .rst_ni(rst_ni),
@@ -549,6 +558,9 @@ module ibex_core import ibex_pkg::*; #(
     .instr_rdata_i        (instr_rdata_id),
     .instr_rdata_alu_i    (instr_rdata_alu_id),
     .instr_rdata_c_i      (instr_rdata_c_id),
+    .instr_rdata_rd_i     (instr_rdata_rd_id),
+    .instr_rdata_rs1_i    (instr_rdata_rs1_id), 
+    .instr_rdata_rs2_i    (instr_rdata_rs2_id),
     .instr_is_compressed_i(instr_is_compressed_id),
     .instr_bp_taken_i     (instr_bp_taken_id),
 

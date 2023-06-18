@@ -16,6 +16,9 @@ module shufflev_prefetch_buffer #(
   output logic        valid_o,
   output logic        is_compress_o,
   output logic [31:0] rdata_o,
+  output logic [NUM_PHYSICAL_REGS_NUM_BIT-1:0] rdata_rd_o,
+  output logic [NUM_PHYSICAL_REGS_NUM_BIT-1:0] rdata_rs1_o,
+  output logic [NUM_PHYSICAL_REGS_NUM_BIT-1:0] rdata_rs2_o,
   output logic [31:0] addr_o,
   output logic        err_o,        
   output logic        err_plus2_o,  // error is caused by the second half of an unaligned uncompressed instruction
@@ -206,6 +209,9 @@ module shufflev_prefetch_buffer #(
   assign valid_o = inst_buffer_full || (inst_buffer_not_empty && discard_prefetch_buffer_q);  // instruction buffer may not be full if we are currently awaiting branch outcome
   assign is_compress_o = inst_buffer_is_compress_q[inst_buffer_start_ptr_q];
   assign rdata_o = inst_buffer_data_q[inst_buffer_start_ptr_q];
+  assign rdata_rd_o = inst_buffer_rd_physical_q[inst_buffer_start_ptr_q];
+  assign rdata_rs1_o = inst_buffer_rs1_physical_q[inst_buffer_start_ptr_q];
+  assign rdata_rs2_o = inst_buffer_rs2_physical_q[inst_buffer_start_ptr_q];
   assign addr_o = inst_buffer_addr_q[inst_buffer_start_ptr_q];
   assign err_o = 1'b0;
   assign err_plus2_o = 1'b0;
@@ -262,9 +268,9 @@ module shufflev_prefetch_buffer #(
   logic [DEPTH-1:0] [DEPTH-1:0]                     inst_buffer_dependency_d, inst_buffer_dependency_q;       // indicate which instruction does this instruction depends on
   logic [DEPTH-1:0]                                 inst_buffer_is_load_store_d, inst_buffer_is_load_store_q; // indicate whether this instruction is a load/store
 
-  logic [NUM_LOGICAL_REGS_NUM_BIT-1:0] [NUM_PHYSICAL_REGS_NUM_BIT-1:0] logical_to_physical_reg_d, logical_to_physical_reg_q; // store the mapping between logical to physical register (binary format)
-  logic [NUM_PHYSICAL_REGS-1:0]                                        physical_reg_reserved_d, physical_reg_reserved_q;     // keep track of physical registers currently reserved
-                                                                                                                             // (this contain identical data to logical_to_physical_reg_* but in bit vector format)
+  logic [NUM_LOGICAL_REGS-1:0] [NUM_PHYSICAL_REGS_NUM_BIT-1:0] logical_to_physical_reg_d, logical_to_physical_reg_q; // store the mapping between logical to physical register (binary format)
+  logic [NUM_PHYSICAL_REGS-1:0]                                physical_reg_reserved_d, physical_reg_reserved_q;     // keep track of physical registers currently reserved
+                                                                                                                     // (this contain identical data to logical_to_physical_reg_* but in bit vector format)
                                                                                                                             
 
   // find the first avilable physical register by performing OR between physical_reg_reserved_q and each element of inst_buffer_physical_reg_usage_q and find the index of the rightmost 0
@@ -274,11 +280,12 @@ module shufflev_prefetch_buffer #(
   always_comb begin
     physical_reg_in_used = physical_reg_reserved_q;
     for (int i=0; i<DEPTH; i++) begin
-      physical_reg_in_used |= inst_buffer_physical_reg_usage_q[i];
+      // we can avoid AND with the valid bit as `inst_buffer_physical_reg_usage_` is clear when the instruction is removed from the buffer
+      physical_reg_in_used |= inst_buffer_physical_reg_usage_q[i] /*& {NUM_PHYSICAL_REGS{inst_buffer_valid_q[i]}}*/; 
     end
 
     first_available_physical_reg_id = 'd0;
-    for (int i=NUM_PHYSICAL_REGS; i>=0; i--) begin
+    for (int i=NUM_PHYSICAL_REGS-1; i>=0; i--) begin
       if (!physical_reg_in_used[i]) begin
         first_available_physical_reg_id = NUM_PHYSICAL_REGS_NUM_BIT'(i);
       end
@@ -297,17 +304,10 @@ module shufflev_prefetch_buffer #(
     for (int i=0; i<NUM_LOGICAL_REGS; i++) begin
       logical_to_physical_reg_d[i] = logical_to_physical_reg_q[i];
     end
-    for (int i=0; i<NUM_PHYSICAL_REGS; i++) begin
-      physical_reg_reserved_d[i] = physical_reg_reserved_q[i];
-    end
+    physical_reg_reserved_d = physical_reg_reserved_q;
 
-    // release all physical registers reserved after this instruction has been sent to the ID/EX stage
-    // Note: we don't need to reserve the physical regs till the instruction executes completely since 
-    // the actual usage of the physical registers happen in the ID/EX and here we only pre-reserve them
     if (inst_buffer_to_id_ex) begin
-      if (inst_buffer_rd_physical_d[inst_buffer_start_ptr_q] != 'd0) begin
-        physical_reg_reserved_d[inst_buffer_rd_physical_d[inst_buffer_start_ptr_q]] = 1'b0;
-      end
+      // clear inst_buffer_physical_reg_usage_ so the system known which physical register is not being refer to by instruction in the instruction buffer 
       inst_buffer_physical_reg_usage_d[inst_buffer_start_ptr_q] = 'd0;
       // clear the dependency bit of other instructions that depends on this instruction
       for (int i=0; i<DEPTH; i++) begin
@@ -317,14 +317,14 @@ module shufflev_prefetch_buffer #(
     
     if (prefetch_buffer_to_inst_buffer) begin
       // reserve new physical register for RD if needed
-      if (current_uncompressed_opcode_has_rd == 'd0) begin
-        inst_buffer_rd_physical_d[inst_buffer_end_ptr_q] = 'd0;
-      end else begin
+      if (current_uncompressed_opcode_has_rd && (current_uncompressed_opcode_rd != 'd0)) begin
         inst_buffer_rd_physical_d[inst_buffer_end_ptr_q] = first_available_physical_reg_id;
 
-        physical_reg_reserved_d[logical_to_physical_reg_d[current_uncompressed_opcode_rd]] = 1'b0; 
+        physical_reg_reserved_d[logical_to_physical_reg_d[current_uncompressed_opcode_rd]] = 1'b0;
         logical_to_physical_reg_d[current_uncompressed_opcode_rd] = first_available_physical_reg_id;
-        physical_reg_reserved_d[first_available_physical_reg_id] = 1'b1; 
+        physical_reg_reserved_d[first_available_physical_reg_id] = 1'b1;
+      end else begin
+        inst_buffer_rd_physical_d[inst_buffer_end_ptr_q] = 'd0;
       end
       // rename rs1, rs2
       inst_buffer_rs1_physical_d[inst_buffer_end_ptr_q] = current_uncompressed_opcode_has_rs1 ? logical_to_physical_reg_q[current_uncompressed_opcode_rs1] : 'd0;
@@ -338,10 +338,14 @@ module shufflev_prefetch_buffer #(
       inst_buffer_dependency_d[inst_buffer_end_ptr_q] = 'd0;
       for (int i=0; i<DEPTH; i++) begin
         // TODO: handle syscall (rd2) and ecall/ebreak
-        if (inst_buffer_valid_q[i] && ((inst_buffer_rd_physical_q[i] == inst_buffer_rs1_physical_d[inst_buffer_end_ptr_q]) || 
-                                       (inst_buffer_rd_physical_q[i] == inst_buffer_rs2_physical_d[inst_buffer_end_ptr_q]) ||
-                                       (inst_buffer_is_load_store_q[i] && prefetch_buffer_rdata_load_or_store))) begin
-          inst_buffer_dependency_d[inst_buffer_end_ptr_q][i] = 1'b1;
+        if (inst_buffer_valid_q[i]) begin
+          if ((inst_buffer_rd_physical_q[i] != 'd0) && (inst_buffer_rd_physical_q[i] == inst_buffer_rs1_physical_d[inst_buffer_end_ptr_q]
+                                                      || inst_buffer_rd_physical_q[i] == inst_buffer_rs2_physical_d[inst_buffer_end_ptr_q])) begin
+            inst_buffer_dependency_d[inst_buffer_end_ptr_q][i] = 1'b1;
+          end
+          if (inst_buffer_is_load_store_q[i] && prefetch_buffer_rdata_load_or_store) begin
+            inst_buffer_dependency_d[inst_buffer_end_ptr_q][i] = 1'b1;
+          end
         end
       end 
       // do not depend on ourself (checking the valid bit in the for-loop is not enough as old instruction can be removed and new instruction can be added in the same cycle)

@@ -17,7 +17,8 @@
 module ibex_wb_stage #(
   parameter bit ResetAll          = 1'b0,
   parameter bit WritebackStage    = 1'b0,
-  parameter bit DummyInstructions = 1'b0
+  parameter bit DummyInstructions = 1'b0,
+  parameter int unsigned      NumPhysicalRegs   = 64
 ) (
   input  logic                     clk_i,
   input  logic                     rst_ni,
@@ -38,7 +39,7 @@ module ibex_wb_stage #(
   output logic                     perf_instr_ret_wb_spec_o,
   output logic                     perf_instr_ret_compressed_wb_spec_o,
 
-  input  logic [4:0]               rf_waddr_id_i,
+  input  logic [$clog2(NumPhysicalRegs)-1:0] rf_waddr_id_i,
   input  logic [31:0]              rf_wdata_id_i,
   input  logic                     rf_we_id_i,
 
@@ -49,7 +50,7 @@ module ibex_wb_stage #(
 
   output logic [31:0]              rf_wdata_fwd_wb_o,
 
-  output logic [4:0]               rf_waddr_wb_o,
+  output logic [$clog2(NumPhysicalRegs)-1:0] rf_waddr_wb_o,
   output logic [31:0]              rf_wdata_wb_o,
   output logic                     rf_we_wb_o,
 
@@ -71,7 +72,7 @@ module ibex_wb_stage #(
   if (WritebackStage) begin : g_writeback_stage
     logic [31:0]    rf_wdata_wb_q;
     logic           rf_we_wb_q;
-    logic [4:0]     rf_waddr_wb_q;
+    logic [$clog2(NumPhysicalRegs)-1:0]     rf_waddr_wb_q;
 
     logic           wb_done;
 

@@ -27,7 +27,8 @@ module ibex_if_stage import ibex_pkg::*; #(
   parameter lfsr_perm_t  RndCnstLfsrPerm   = RndCnstLfsrPermDefault,
   parameter bit          BranchPredictor   = 1'b0,
   parameter bit          MemECC            = 1'b0,
-  parameter int unsigned MemDataWidth      = MemECC ? 32 + 7 : 32
+  parameter int unsigned MemDataWidth      = MemECC ? 32 + 7 : 32,
+  parameter int unsigned NumPhysicalRegs   = 64
 ) (
   input  logic                         clk_i,
   input  logic                         rst_ni,
@@ -67,6 +68,9 @@ module ibex_if_stage import ibex_pkg::*; #(
   output logic [15:0]                 instr_rdata_c_id_o,       // compressed instr for ID stage
                                                                 // (mtval), meaningful only if
                                                                 // instr_is_compressed_id_o = 1'b1
+  output logic [$clog2(NumPhysicalRegs)-1:0] instr_rdata_rd_id_o,
+  output logic [$clog2(NumPhysicalRegs)-1:0] instr_rdata_rs1_id_o,
+  output logic [$clog2(NumPhysicalRegs)-1:0] instr_rdata_rs2_id_o,
   output logic                        instr_is_compressed_id_o, // compressed decoder thinks this
                                                                 // is a compressed instr
   output logic                        instr_bp_taken_o,         // instruction was predicted to be
@@ -137,6 +141,9 @@ module ibex_if_stage import ibex_pkg::*; #(
   logic              fetch_is_compress; // TODO: add check as we don't support ICache with ShuffleV at the moment 
   logic              fetch_ready;
   logic       [31:0] fetch_rdata;
+  logic       [$clog2(NumPhysicalRegs)-1:0] fetch_rdata_rd;
+  logic       [$clog2(NumPhysicalRegs)-1:0] fetch_rdata_rs1;
+  logic       [$clog2(NumPhysicalRegs)-1:0] fetch_rdata_rs2;
   logic       [31:0] fetch_addr;
   logic              fetch_err;
   logic              fetch_err_plus2;
@@ -313,7 +320,8 @@ module ibex_if_stage import ibex_pkg::*; #(
   end else begin : gen_prefetch_buffer
     // prefetch buffer, caches a fixed number of instructions
     shufflev_prefetch_buffer #(
-      .ResetAll        (ResetAll)
+      .ResetAll          (ResetAll),
+      .NUM_PHYSICAL_REGS (NumPhysicalRegs)
     ) prefetch_buffer_i (
         .clk_i               ( clk_i                      ),
         .rst_ni              ( rst_ni                     ),
@@ -327,6 +335,9 @@ module ibex_if_stage import ibex_pkg::*; #(
         .valid_o             ( fetch_valid_raw            ),
         .is_compress_o       ( fetch_is_compress          ),
         .rdata_o             ( fetch_rdata                ),
+        .rdata_rd_o          ( fetch_rdata_rd             ),
+        .rdata_rs1_o         ( fetch_rdata_rs1            ),
+        .rdata_rs2_o         ( fetch_rdata_rs2            ),
         .addr_o              ( fetch_addr                 ),
         .err_o               ( fetch_err                  ),
         .err_plus2_o         ( fetch_err_plus2            ),
@@ -505,6 +516,9 @@ module ibex_if_stage import ibex_pkg::*; #(
         instr_rdata_id_o         <= instr_out;
         // To reduce fan-out and help timing from the instr_rdata_id flops they are replicated.
         instr_rdata_alu_id_o     <= instr_out;
+        instr_rdata_rd_id_o      <= fetch_rdata_rd;
+        instr_rdata_rs1_id_o     <= fetch_rdata_rs1;
+        instr_rdata_rs2_id_o     <= fetch_rdata_rs2;
         instr_fetch_err_o        <= instr_err_out;
         instr_fetch_err_plus2_o  <= if_instr_err_plus2;
         instr_rdata_c_id_o       <= if_instr_rdata[15:0];
@@ -519,9 +533,12 @@ module ibex_if_stage import ibex_pkg::*; #(
         instr_rdata_id_o         <= instr_out;
         // To reduce fan-out and help timing from the instr_rdata_id flops they are replicated.
         instr_rdata_alu_id_o     <= instr_out;
+        instr_rdata_rd_id_o      <= fetch_rdata_rd;
+        instr_rdata_rs1_id_o     <= fetch_rdata_rs1;
+        instr_rdata_rs2_id_o     <= fetch_rdata_rs2;
         instr_fetch_err_o        <= instr_err_out;
         instr_fetch_err_plus2_o  <= if_instr_err_plus2;
-        instr_rdata_c_id_o       <= if_instr_rdata[15:0];
+        instr_rdata_c_id_o       <= if_instr_rdata[15:0]; // // TODO: store the compress version of the instruction as well
         instr_is_compressed_id_o <= instr_is_compressed_out;
         illegal_c_insn_id_o      <= illegal_c_instr_out;
         pc_id_o                  <= pc_if_o;

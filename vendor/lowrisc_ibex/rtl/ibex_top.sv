@@ -37,7 +37,8 @@ module ibex_top import ibex_pkg::*; #(
   parameter int unsigned DmExceptionAddr  = 32'h1A110808,
   // Default seed and nonce for scrambling
   parameter logic [SCRAMBLE_KEY_W-1:0]   RndCnstIbexKey   = RndCnstIbexKeyDefault,
-  parameter logic [SCRAMBLE_NONCE_W-1:0] RndCnstIbexNonce = RndCnstIbexNonceDefault
+  parameter logic [SCRAMBLE_NONCE_W-1:0] RndCnstIbexNonce = RndCnstIbexNonceDefault,
+  parameter int unsigned NumPhysicalRegs   = 64
 ) (
   // Clock and Reset
   input  logic                         clk_i,
@@ -163,9 +164,9 @@ module ibex_top import ibex_pkg::*; #(
   // Core <-> Register file signals
   logic                        dummy_instr_id;
   logic                        dummy_instr_wb;
-  logic [4:0]                  rf_raddr_a;
-  logic [4:0]                  rf_raddr_b;
-  logic [4:0]                  rf_waddr_wb;
+  logic [$clog2(NumPhysicalRegs)-1:0]                  rf_raddr_a;
+  logic [$clog2(NumPhysicalRegs)-1:0]                  rf_raddr_b;
+  logic [$clog2(NumPhysicalRegs)-1:0]                  rf_waddr_wb;
   logic                        rf_we_wb;
   logic [RegFileDataWidth-1:0] rf_wdata_wb_ecc;
   logic [RegFileDataWidth-1:0] rf_rdata_a_ecc, rf_rdata_a_ecc_buf;
@@ -305,7 +306,8 @@ module ibex_top import ibex_pkg::*; #(
     .MemECC           (MemECC),
     .MemDataWidth     (MemDataWidth),
     .DmHaltAddr       (DmHaltAddr),
-    .DmExceptionAddr  (DmExceptionAddr)
+    .DmExceptionAddr  (DmExceptionAddr),
+    .NumPhysicalRegs  (NumPhysicalRegs)
   ) u_ibex_core (
     .clk_i(clk),
     .rst_ni,
@@ -419,7 +421,8 @@ module ibex_top import ibex_pkg::*; #(
       .DummyInstructions(DummyInstructions),
       // SEC_CM: DATA_REG_SW.GLITCH_DETECT
       .WrenCheck        (RegFileWrenCheck),
-      .WordZeroVal      (RegFileDataWidth'(prim_secded_pkg::SecdedInv3932ZeroWord))
+      .WordZeroVal      (RegFileDataWidth'(prim_secded_pkg::SecdedInv3932ZeroWord)),
+      .NumRegs          (NumPhysicalRegs)
     ) register_file_i (
       .clk_i (clk),
       .rst_ni(rst_ni),
@@ -444,7 +447,8 @@ module ibex_top import ibex_pkg::*; #(
       .DummyInstructions(DummyInstructions),
       // SEC_CM: DATA_REG_SW.GLITCH_DETECT
       .WrenCheck        (RegFileWrenCheck),
-      .WordZeroVal      (RegFileDataWidth'(prim_secded_pkg::SecdedInv3932ZeroWord))
+      .WordZeroVal      (RegFileDataWidth'(prim_secded_pkg::SecdedInv3932ZeroWord)),
+      .NumRegs          (NumPhysicalRegs)
     ) register_file_i (
       .clk_i (clk),
       .rst_ni(rst_ni),

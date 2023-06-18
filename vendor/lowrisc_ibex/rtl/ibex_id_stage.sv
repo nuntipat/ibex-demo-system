@@ -25,7 +25,8 @@ module ibex_id_stage #(
   parameter bit               BranchTargetALU = 0,
   parameter bit               WritebackStage  = 0,
   parameter bit               BranchPredictor = 0,
-  parameter bit               MemECC          = 1'b0
+  parameter bit               MemECC          = 1'b0,
+  parameter int unsigned      NumPhysicalRegs   = 64
 ) (
   input  logic                      clk_i,
   input  logic                      rst_ni,
@@ -38,6 +39,9 @@ module ibex_id_stage #(
   input  logic [31:0]               instr_rdata_i,         // from IF-ID pipeline registers
   input  logic [31:0]               instr_rdata_alu_i,     // from IF-ID pipeline registers
   input  logic [15:0]               instr_rdata_c_i,       // from IF-ID pipeline registers
+  input  logic [$clog2(NumPhysicalRegs)-1:0] instr_rdata_rd_i,
+  input  logic [$clog2(NumPhysicalRegs)-1:0] instr_rdata_rs1_i,
+  input  logic [$clog2(NumPhysicalRegs)-1:0] instr_rdata_rs2_i,
   input  logic                      instr_is_compressed_i,
   input  logic                      instr_bp_taken_i,
   output logic                      instr_req_o,
@@ -151,22 +155,22 @@ module ibex_id_stage #(
   input  logic [31:0]               csr_rdata_i,
 
   // Register file read
-  output logic [4:0]                rf_raddr_a_o,
+  output logic [$clog2(NumPhysicalRegs)-1:0]                rf_raddr_a_o,
   input  logic [31:0]               rf_rdata_a_i,
-  output logic [4:0]                rf_raddr_b_o,
+  output logic [$clog2(NumPhysicalRegs)-1:0]                rf_raddr_b_o,
   input  logic [31:0]               rf_rdata_b_i,
   output logic                      rf_ren_a_o,
   output logic                      rf_ren_b_o,
 
   // Register file write (via writeback)
-  output logic [4:0]                rf_waddr_id_o,
+  output logic [$clog2(NumPhysicalRegs)-1:0]                rf_waddr_id_o,
   output logic [31:0]               rf_wdata_id_o,
   output logic                      rf_we_id_o,
   output logic                      rf_rd_a_wb_match_o,
   output logic                      rf_rd_b_wb_match_o,
 
   // Register write information from writeback (for resolving data hazards)
-  input  logic [4:0]                rf_waddr_wb_i,
+  input  logic [$clog2(NumPhysicalRegs)-1:0]                rf_waddr_wb_i,
   input  logic [31:0]               rf_wdata_fwd_wb_i,
   input  logic                      rf_write_wb_i,
 
@@ -471,9 +475,9 @@ module ibex_id_stage #(
     .rf_wdata_sel_o(rf_wdata_sel),
     .rf_we_o       (rf_we_dec),
 
-    .rf_raddr_a_o(rf_raddr_a_o),
-    .rf_raddr_b_o(rf_raddr_b_o),
-    .rf_waddr_o  (rf_waddr_id_o),
+    .rf_raddr_a_o(),  // we ignore rd, rs1, rs2 from the decoder and use the renamed register from the IF stage  
+    .rf_raddr_b_o(),
+    .rf_waddr_o  (),
     .rf_ren_a_o  (rf_ren_a_dec),
     .rf_ren_b_o  (rf_ren_b_dec),
 
@@ -505,6 +509,10 @@ module ibex_id_stage #(
     .jump_in_dec_o  (jump_in_dec),
     .branch_in_dec_o(branch_in_dec)
   );
+
+  assign rf_raddr_a_o = instr_rdata_rs1_i;
+  assign rf_raddr_b_o = instr_rdata_rs2_i; 
+  assign rf_waddr_id_o = instr_rdata_rd_i;
 
   /////////////////////////////////
   // CSR-related pipeline flushes //
@@ -1048,7 +1056,7 @@ module ibex_id_stage #(
     // Assign inputs and internal wiring to unused signals to satisfy lint checks
     // Tie-off outputs to constant values
     logic unused_data_req_done_ex;
-    logic [4:0] unused_rf_waddr_wb;
+    logic [$clog2(NumPhysicalRegs)-1:0] unused_rf_waddr_wb;
     logic unused_rf_write_wb;
     logic unused_outstanding_load_wb;
     logic unused_outstanding_store_wb;

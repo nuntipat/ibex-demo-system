@@ -15,7 +15,8 @@ module ibex_register_file_ff #(
   parameter int unsigned          DataWidth         = 32,
   parameter bit                   DummyInstructions = 0,
   parameter bit                   WrenCheck         = 0,
-  parameter logic [DataWidth-1:0] WordZeroVal       = '0
+  parameter logic [DataWidth-1:0] WordZeroVal       = '0,
+  parameter int unsigned          NumRegs           = 64
 ) (
   // Clock and Reset
   input  logic                 clk_i,
@@ -26,16 +27,16 @@ module ibex_register_file_ff #(
   input  logic                 dummy_instr_wb_i,
 
   //Read port R1
-  input  logic [4:0]           raddr_a_i,
+  input  logic [ADDR_WIDTH-1:0] raddr_a_i,
   output logic [DataWidth-1:0] rdata_a_o,
 
   //Read port R2
-  input  logic [4:0]           raddr_b_i,
+  input  logic [ADDR_WIDTH-1:0] raddr_b_i,
   output logic [DataWidth-1:0] rdata_b_o,
 
 
   // Write port W1
-  input  logic [4:0]           waddr_a_i,
+  input  logic [ADDR_WIDTH-1:0] waddr_a_i,
   input  logic [DataWidth-1:0] wdata_a_i,
   input  logic                 we_a_i,
 
@@ -43,8 +44,8 @@ module ibex_register_file_ff #(
   output logic                 err_o
 );
 
-  localparam int unsigned ADDR_WIDTH = RV32E ? 4 : 5;
-  localparam int unsigned NUM_WORDS  = 2**ADDR_WIDTH;
+  localparam int unsigned ADDR_WIDTH = $clog2(NumRegs);
+  localparam int unsigned NUM_WORDS  = NumRegs;
 
   logic [DataWidth-1:0] rf_reg   [NUM_WORDS];
   logic [NUM_WORDS-1:0] we_a_dec;
