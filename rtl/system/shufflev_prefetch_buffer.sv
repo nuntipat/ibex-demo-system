@@ -102,6 +102,9 @@ module shufflev_prefetch_buffer #(
   logic prefetch_buffer_rdata_load_or_store;
   assign prefetch_buffer_rdata_load_or_store = (prefetch_buffer_rdata_uncompress[6:0] == 7'b0000011)  // load 
                                             || (prefetch_buffer_rdata_uncompress[6:0] == 7'b0100011); // store
+  
+  logic prefetch_buffer_rdata_ecall_ebreak;
+  assign prefetch_buffer_rdata_ecall_ebreak = (prefetch_buffer_rdata_uncompress[6:0] == 7'b1110011) && (prefetch_buffer_rdata_uncompress[14:12] == 3'd0);
 
   logic         discard_prefetch_buffer_d, discard_prefetch_buffer_q; // assert to prevent reading from the prefetch buffer as the previous instruction may change PC
   logic [31:0]  latest_branch_pc_d, latest_branch_pc_q;               // address of the last branch instruction that assert `discard_prefetch_buffer_q`
@@ -150,8 +153,6 @@ module shufflev_prefetch_buffer #(
   logic [DEPTH-1:0] [31:0]    inst_buffer_data_d, inst_buffer_data_q;               // uncompress instruction to be sent to the ID/EX stage
   logic [DEPTH-1:0]           inst_buffer_is_compress_d, inst_buffer_is_compress_q; // indicate whether the instruction is originally a compress instruction or not
   logic [DEPTH-1:0]           inst_buffer_valid_d, inst_buffer_valid_q;             // indicate whether the entry in the buffer is valid or not
-  logic [DEPTH_NUM_BIT-1:0]   inst_buffer_start_ptr_d, inst_buffer_start_ptr_q;     // TODO: replace with random logic
-  logic [DEPTH_NUM_BIT-1:0]   inst_buffer_end_ptr_d, inst_buffer_end_ptr_q;         // TODO: replace with random logic
 
   logic                       inst_buffer_full, inst_buffer_not_empty;
   assign inst_buffer_full = &inst_buffer_valid_q;
@@ -176,43 +177,33 @@ module shufflev_prefetch_buffer #(
       inst_buffer_is_compress_d[i] = inst_buffer_is_compress_q[i];
       inst_buffer_valid_d[i] = inst_buffer_valid_q[i];
     end
-    inst_buffer_start_ptr_d = inst_buffer_start_ptr_q;
-    inst_buffer_end_ptr_d = inst_buffer_end_ptr_q;
 
     ibex_prefetch_buffer_ready_i = 1'b0;
 
     // remove entry from the instruction buffer after it was sent to the ID/EX stage. we should remove the instruction first before adding a new one 
     // as start_ptr and end_ptr may point to the same entry and the valid bit should end up being set when we remove and add instruction in the same cycle
     if (inst_buffer_to_id_ex) begin
-      inst_buffer_valid_d[inst_buffer_start_ptr_q] = 1'b0;
-      inst_buffer_start_ptr_d = inst_buffer_start_ptr_q + 'd1;
-      if (inst_buffer_start_ptr_d == DEPTH_NUM_BIT'(DEPTH)) begin
-        inst_buffer_start_ptr_d = 'd0;
-      end
+      inst_buffer_valid_d[inst_buffer_remove_index] = 1'b0;
     end
 
     // retrieve new instruction from the prefetch buffer
     if (prefetch_buffer_to_inst_buffer) begin
       ibex_prefetch_buffer_ready_i = 1'b1;
-      inst_buffer_addr_d[inst_buffer_end_ptr_q] = ibex_prefetch_buffer_addr_o;
-      inst_buffer_data_d[inst_buffer_end_ptr_q] = prefetch_buffer_rdata_uncompress;
-      inst_buffer_is_compress_d[inst_buffer_end_ptr_q] = prefetch_buffer_rdata_is_compress;
-      inst_buffer_valid_d[inst_buffer_end_ptr_q] = 1'b1;
-      inst_buffer_end_ptr_d = inst_buffer_end_ptr_q + 1;
-      if (inst_buffer_end_ptr_d == DEPTH_NUM_BIT'(DEPTH)) begin
-        inst_buffer_end_ptr_d = 'd0;
-      end
+      inst_buffer_addr_d[inst_buffer_insert_index] = ibex_prefetch_buffer_addr_o;
+      inst_buffer_data_d[inst_buffer_insert_index] = prefetch_buffer_rdata_uncompress;
+      inst_buffer_is_compress_d[inst_buffer_insert_index] = prefetch_buffer_rdata_is_compress;
+      inst_buffer_valid_d[inst_buffer_insert_index] = 1'b1;
     end
   end
 
   // outputs to the ID/EX stage
-  assign valid_o = inst_buffer_full || (inst_buffer_not_empty && discard_prefetch_buffer_q);  // instruction buffer may not be full if we are currently awaiting branch outcome
-  assign is_compress_o = inst_buffer_is_compress_q[inst_buffer_start_ptr_q];
-  assign rdata_o = inst_buffer_data_q[inst_buffer_start_ptr_q];
-  assign rdata_rd_o = inst_buffer_rd_physical_q[inst_buffer_start_ptr_q];
-  assign rdata_rs1_o = inst_buffer_rs1_physical_q[inst_buffer_start_ptr_q];
-  assign rdata_rs2_o = inst_buffer_rs2_physical_q[inst_buffer_start_ptr_q];
-  assign addr_o = inst_buffer_addr_q[inst_buffer_start_ptr_q];
+  assign valid_o = (inst_buffer_full || (inst_buffer_not_empty && discard_prefetch_buffer_q)) && !branch_i;  // instruction buffer may not be full if we are currently awaiting branch outcome
+  assign is_compress_o = inst_buffer_is_compress_q[inst_buffer_remove_index];
+  assign rdata_o = inst_buffer_data_q[inst_buffer_remove_index];
+  assign rdata_rd_o = inst_buffer_rd_physical_q[inst_buffer_remove_index];
+  assign rdata_rs1_o = inst_buffer_rs1_physical_q[inst_buffer_remove_index];
+  assign rdata_rs2_o = inst_buffer_rs2_physical_q[inst_buffer_remove_index];
+  assign addr_o = inst_buffer_addr_q[inst_buffer_remove_index];
   assign err_o = 1'b0;
   assign err_plus2_o = 1'b0;
 
@@ -221,8 +212,6 @@ module shufflev_prefetch_buffer #(
       for (int i=0; i<DEPTH; i++) begin
         inst_buffer_valid_q[i] <= 1'b0;
       end
-      inst_buffer_start_ptr_q <= 'd0;
-      inst_buffer_end_ptr_q <= 'd0;
     end else begin
       for (int i=0; i<DEPTH; i++) begin
         inst_buffer_addr_q[i] <= inst_buffer_addr_d[i];
@@ -230,8 +219,6 @@ module shufflev_prefetch_buffer #(
         inst_buffer_is_compress_q[i] <= inst_buffer_is_compress_d[i];
         inst_buffer_valid_q[i] <= inst_buffer_valid_d[i];
       end
-      inst_buffer_start_ptr_q <= inst_buffer_start_ptr_d;
-      inst_buffer_end_ptr_q <= inst_buffer_end_ptr_d;
     end
   end
 
@@ -308,50 +295,55 @@ module shufflev_prefetch_buffer #(
 
     if (inst_buffer_to_id_ex) begin
       // clear inst_buffer_physical_reg_usage_ so the system known which physical register is not being refer to by instruction in the instruction buffer 
-      inst_buffer_physical_reg_usage_d[inst_buffer_start_ptr_q] = 'd0;
+      inst_buffer_physical_reg_usage_d[inst_buffer_remove_index] = 'd0;
       // clear the dependency bit of other instructions that depends on this instruction
       for (int i=0; i<DEPTH; i++) begin
-        inst_buffer_dependency_d[i][inst_buffer_start_ptr_q] = 1'b0;
+        inst_buffer_dependency_d[i][inst_buffer_remove_index] = 1'b0;
       end
     end
     
     if (prefetch_buffer_to_inst_buffer) begin
       // reserve new physical register for RD if needed
       if (current_uncompressed_opcode_has_rd && (current_uncompressed_opcode_rd != 'd0)) begin
-        inst_buffer_rd_physical_d[inst_buffer_end_ptr_q] = first_available_physical_reg_id;
+        inst_buffer_rd_physical_d[inst_buffer_insert_index] = first_available_physical_reg_id;
 
         physical_reg_reserved_d[logical_to_physical_reg_d[current_uncompressed_opcode_rd]] = 1'b0;
         logical_to_physical_reg_d[current_uncompressed_opcode_rd] = first_available_physical_reg_id;
         physical_reg_reserved_d[first_available_physical_reg_id] = 1'b1;
       end else begin
-        inst_buffer_rd_physical_d[inst_buffer_end_ptr_q] = 'd0;
+        inst_buffer_rd_physical_d[inst_buffer_insert_index] = 'd0;
       end
       // rename rs1, rs2
-      inst_buffer_rs1_physical_d[inst_buffer_end_ptr_q] = current_uncompressed_opcode_has_rs1 ? logical_to_physical_reg_q[current_uncompressed_opcode_rs1] : 'd0;
-      inst_buffer_rs2_physical_d[inst_buffer_end_ptr_q] = current_uncompressed_opcode_has_rs2 ? logical_to_physical_reg_q[current_uncompressed_opcode_rs2] : 'd0;
+      inst_buffer_rs1_physical_d[inst_buffer_insert_index] = current_uncompressed_opcode_has_rs1 ? logical_to_physical_reg_q[current_uncompressed_opcode_rs1] : 'd0;
+      inst_buffer_rs2_physical_d[inst_buffer_insert_index] = current_uncompressed_opcode_has_rs2 ? logical_to_physical_reg_q[current_uncompressed_opcode_rs2] : 'd0;
       // store physical register usage in bit vector format
-      inst_buffer_physical_reg_usage_d[inst_buffer_end_ptr_q] = (1 << inst_buffer_rd_physical_d[inst_buffer_end_ptr_q]) | 
-                                                                (1 << inst_buffer_rs1_physical_d[inst_buffer_end_ptr_q]) | 
-                                                                (1 << inst_buffer_rs2_physical_d[inst_buffer_end_ptr_q]);
+      inst_buffer_physical_reg_usage_d[inst_buffer_insert_index] = (1 << inst_buffer_rd_physical_d[inst_buffer_insert_index]) | 
+                                                                (1 << inst_buffer_rs1_physical_d[inst_buffer_insert_index]) | 
+                                                                (1 << inst_buffer_rs2_physical_d[inst_buffer_insert_index]);
       
       // check which instructions that this instruction depends on
-      inst_buffer_dependency_d[inst_buffer_end_ptr_q] = 'd0;
+      inst_buffer_dependency_d[inst_buffer_insert_index] = 'd0;
       for (int i=0; i<DEPTH; i++) begin
         // TODO: handle syscall (rd2) and ecall/ebreak
         if (inst_buffer_valid_q[i]) begin
-          if ((inst_buffer_rd_physical_q[i] != 'd0) && (inst_buffer_rd_physical_q[i] == inst_buffer_rs1_physical_d[inst_buffer_end_ptr_q]
-                                                      || inst_buffer_rd_physical_q[i] == inst_buffer_rs2_physical_d[inst_buffer_end_ptr_q])) begin
-            inst_buffer_dependency_d[inst_buffer_end_ptr_q][i] = 1'b1;
+          if ((inst_buffer_rd_physical_q[i] != 'd0) && (inst_buffer_rd_physical_q[i] == inst_buffer_rs1_physical_d[inst_buffer_insert_index]
+                                                      || inst_buffer_rd_physical_q[i] == inst_buffer_rs2_physical_d[inst_buffer_insert_index])) begin
+            inst_buffer_dependency_d[inst_buffer_insert_index][i] = 1'b1;
           end
+          // all load/store should be done in order
           if (inst_buffer_is_load_store_q[i] && prefetch_buffer_rdata_load_or_store) begin
-            inst_buffer_dependency_d[inst_buffer_end_ptr_q][i] = 1'b1;
+            inst_buffer_dependency_d[inst_buffer_insert_index][i] = 1'b1;
+          end
+          // all ecall/ebreak/wfi instructions should be executed after all prior instructions has been completed
+          if (prefetch_buffer_rdata_ecall_ebreak) begin
+            inst_buffer_dependency_d[inst_buffer_insert_index][i] = 1'b1;
           end
         end
       end 
       // do not depend on ourself (checking the valid bit in the for-loop is not enough as old instruction can be removed and new instruction can be added in the same cycle)
-      inst_buffer_dependency_d[inst_buffer_end_ptr_q][inst_buffer_end_ptr_q] = 1'b0;
+      inst_buffer_dependency_d[inst_buffer_insert_index][inst_buffer_insert_index] = 1'b0;
 
-      inst_buffer_is_load_store_d[inst_buffer_end_ptr_q] = prefetch_buffer_rdata_load_or_store;
+      inst_buffer_is_load_store_d[inst_buffer_insert_index] = prefetch_buffer_rdata_load_or_store;
     end
   end
 
@@ -384,5 +376,116 @@ module shufflev_prefetch_buffer #(
       end
     end
   end  
+
+  /* Random logic */ 
+
+  logic [DEPTH-1:0] [DEPTH-1:0] [DEPTH_NUM_BIT-1:0] distance_table;   // the random number generated can't be used directly as an index to select an instruction in the instruction
+                                                                      // buffer as it may point to an invalid entry (blank or awaiting dependent instruction etc.). Thus, we select
+                                                                      // the closest entry instead using the absolute distance pre-computed in this table
+
+  initial begin
+    //          Random Number   0   1   2   3   4  
+    //  ---------------------- --- --- --- --- --- 
+    //   Entry (|Dist| = 0)     0   1   2   3   4  
+    //   Entry (|Dist| = 1)     1   2   3   4   0  
+    //   Entry (|Dist| = 1)     4   0   1   2   3  
+    //   Entry (|Dist| = 2)     2   3   4   0   1  
+    //   Entry (|Dist| = 2)     3   4   0   1   2  
+    for (int c=0; c<DEPTH; c++) begin
+      distance_table[0][c] = DEPTH_NUM_BIT'(c);
+      for (int i=0; i<$ceil((DEPTH-1)/2); i++) begin          // odd rows:  0 +1 X +2 X ...
+        distance_table[1 + (i*2)][c] = DEPTH_NUM_BIT'((c + (i+1)) % DEPTH);
+      end
+      for (int i=0; i<(DEPTH-1)/2; i++) begin                 // even rows: 0 X -1 X -2 ...
+        distance_table[2 + (i*2)][c] = DEPTH_NUM_BIT'((c - (i+1)) >= 0 ? (c - (i+1)) : (c + DEPTH - (i+1)));
+      end
+    end
+    // // log the content of the distance table
+    // for (int c=0; c<DEPTH; c++) begin
+    //   $display("Column %0h", c);
+    //   for (int r=0; r<DEPTH; r++) begin
+    //     $display(distance_table[r][c]);
+    //   end
+    // end
+  end
+
+  logic [DEPTH_NUM_BIT-1:0]   random_number;                  // random number used for selecting one column from the distance table
+  logic [DEPTH-1:0]           random_valid_entry;             // bit vector indicating all ready entries in the instruction buffer
+                                                              // the order of the bit follow the selected column in the distance table 
+  logic [DEPTH_NUM_BIT-1:0]   random_first_valid_entry_index; // index in the `random_valid_entry` that are closest and valid 
+  logic [DEPTH_NUM_BIT-1:0]   inst_buffer_remove_index;       // index of the instruction buffer to retrieve instruction and send to the ID/EX stage
+
+  always_comb begin
+    random_number = DEPTH_NUM_BIT'({$random} % DEPTH);
+
+    for (int i=0; i<DEPTH; i++) begin
+      random_valid_entry[i] = inst_buffer_valid_q[distance_table[i][random_number]] && !(|inst_buffer_dependency_q[distance_table[i][random_number]]); 
+    end
+
+    random_first_valid_entry_index = 'd0;
+    for (int i=DEPTH-1; i>=0; i--) begin
+      if (random_valid_entry[i]) begin
+        random_first_valid_entry_index = DEPTH_NUM_BIT'(i);
+      end
+    end
+
+    inst_buffer_remove_index = distance_table[random_first_valid_entry_index][random_number];
+  end
+
+  logic [DEPTH_NUM_BIT-1:0]   inst_buffer_insert_index;      // index of the instruction buffer to insert new instruction into which will be identical to `inst_buffer_remove_index`
+                                                             // if we are also removing an instruction in this cycle. Otherwise, we pick any unused entry (inst_buffer_valid_q[i] = 0)
+                                                             // Note: checking the valid bit alone is not enough as the valid bit will not be updated until the next clock cycle which 
+                                                             // prevent us from both removing and adding an instruction in the same cycle
+
+  always_comb begin
+    if (inst_buffer_to_id_ex) begin
+      inst_buffer_insert_index = inst_buffer_remove_index;
+    end else begin
+      inst_buffer_insert_index = 'd0;
+      for (int i=DEPTH-1; i>=0; i--) begin
+        if (!inst_buffer_valid_q[i]) begin
+          inst_buffer_insert_index = DEPTH_NUM_BIT'(i);
+        end
+      end
+    end
+  end
+
+  /* Debugging signals */
+
+  /* verilator lint_off UNUSEDSIGNAL */
+  logic [31:0] fetch_id_idex;
+  /* verilator lint_off UNUSEDSIGNAL */
+
+`ifdef SHUFFLEV_ENABLE_FETCHID
+  logic [31:0]                fetch_id_d, fetch_id_q;
+  logic [DEPTH-1:0] [31:0]    inst_buffer_fetch_id_d, inst_buffer_fetch_id_q;       // unique sequential number for debugging purpose
+
+  always_comb begin
+    fetch_id_d = fetch_id_q;
+    for (int i=0; i<DEPTH; i++) begin
+      inst_buffer_fetch_id_d[i] = inst_buffer_fetch_id_q[i];
+    end
+
+    if (prefetch_buffer_to_inst_buffer) begin
+      inst_buffer_fetch_id_d[inst_buffer_insert_index] = fetch_id_q;
+      fetch_id_d = fetch_id_q + 1;
+    end
+  end
+
+  always_ff @(posedge clk_i or negedge rst_ni) begin
+    if (!rst_ni) begin
+      fetch_id_q <= 'd0;
+    end else begin
+      fetch_id_q <= fetch_id_d;
+      for (int i=0; i<DEPTH; i++) begin
+        inst_buffer_fetch_id_q[i] <= inst_buffer_fetch_id_d[i];
+      end
+    end
+  end
+
+  assign fetch_id_idex = inst_buffer_fetch_id_q[inst_buffer_remove_index];
+`else
+  assign fetch_id_idex = 'd0;
+`endif
 
 endmodule
