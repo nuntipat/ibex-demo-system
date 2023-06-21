@@ -1,7 +1,11 @@
+`include "shufflev_constant.sv"
+
 module shufflev_prefetch_buffer #(
-  parameter bit ResetAll        = 1'b0,
-  parameter int unsigned DEPTH  = 5,
-  parameter int unsigned NUM_PHYSICAL_REGS = 64
+  parameter bit             ResetAll          = 1'b0,
+  parameter int unsigned    DEPTH             = 4,
+  parameter int unsigned    NUM_PHYSICAL_REGS = 64,
+  parameter shufflev_rng_e  RngType           = RandomTkacik,
+  parameter bit             EnableFetchId     = 1'b0
 ) (
   input  logic        clk_i,
   input  logic        rst_ni,   // asynchronous reset
@@ -197,7 +201,7 @@ module shufflev_prefetch_buffer #(
   end
 
   // outputs to the ID/EX stage
-  assign valid_o = (inst_buffer_full || (inst_buffer_not_empty && discard_prefetch_buffer_q)) && !branch_i;  // instruction buffer may not be full if we are currently awaiting branch outcome
+  assign valid_o = (inst_buffer_full || (inst_buffer_not_empty && discard_prefetch_buffer_q)) && !branch_i && random_number_valid;  // instruction buffer may not be full if we are currently awaiting branch outcome
   assign is_compress_o = inst_buffer_is_compress_q[inst_buffer_remove_index];
   assign rdata_o = inst_buffer_data_q[inst_buffer_remove_index];
   assign rdata_rd_o = inst_buffer_rd_physical_q[inst_buffer_remove_index];
@@ -393,7 +397,7 @@ module shufflev_prefetch_buffer #(
     //   Entry (|Dist| = 2)     3   4   0   1   2  
     for (int c=0; c<DEPTH; c++) begin
       distance_table[0][c] = DEPTH_NUM_BIT'(c);
-      for (int i=0; i<$ceil((DEPTH-1)/2); i++) begin          // odd rows:  0 +1 X +2 X ...
+      for (int i=0; i<$ceil((DEPTH-1)/2.0); i++) begin          // odd rows:  0 +1 X +2 X ...
         distance_table[1 + (i*2)][c] = DEPTH_NUM_BIT'((c + (i+1)) % DEPTH);
       end
       for (int i=0; i<(DEPTH-1)/2; i++) begin                 // even rows: 0 X -1 X -2 ...
@@ -410,14 +414,25 @@ module shufflev_prefetch_buffer #(
   end
 
   logic [DEPTH_NUM_BIT-1:0]   random_number;                  // random number used for selecting one column from the distance table
+  logic                       random_number_valid;
+
+  shufflev_rng #(
+    .RngType    (RngType),
+    .RngSeed    (123456),
+    .MaxValue   (DEPTH-1)
+  ) u_shufflev_rng (
+    .clk_i      (clk_i),
+    .rst_ni     (rst_ni),
+    .number_o   (random_number),
+    .valid_o    (random_number_valid)
+  );
+
   logic [DEPTH-1:0]           random_valid_entry;             // bit vector indicating all ready entries in the instruction buffer
                                                               // the order of the bit follow the selected column in the distance table 
   logic [DEPTH_NUM_BIT-1:0]   random_first_valid_entry_index; // index in the `random_valid_entry` that are closest and valid 
   logic [DEPTH_NUM_BIT-1:0]   inst_buffer_remove_index;       // index of the instruction buffer to retrieve instruction and send to the ID/EX stage
 
   always_comb begin
-    random_number = DEPTH_NUM_BIT'({$random} % DEPTH);
-
     for (int i=0; i<DEPTH; i++) begin
       random_valid_entry[i] = inst_buffer_valid_q[distance_table[i][random_number]] && !(|inst_buffer_dependency_q[distance_table[i][random_number]]); 
     end
@@ -456,36 +471,36 @@ module shufflev_prefetch_buffer #(
   logic [31:0] fetch_id_idex;
   /* verilator lint_off UNUSEDSIGNAL */
 
-`ifdef SHUFFLEV_ENABLE_FETCHID
-  logic [31:0]                fetch_id_d, fetch_id_q;
-  logic [DEPTH-1:0] [31:0]    inst_buffer_fetch_id_d, inst_buffer_fetch_id_q;       // unique sequential number for debugging purpose
+  if (EnableFetchId) begin
+    logic [31:0]                fetch_id_d, fetch_id_q;
+    logic [DEPTH-1:0] [31:0]    inst_buffer_fetch_id_d, inst_buffer_fetch_id_q;       // unique sequential number for debugging purpose
 
-  always_comb begin
-    fetch_id_d = fetch_id_q;
-    for (int i=0; i<DEPTH; i++) begin
-      inst_buffer_fetch_id_d[i] = inst_buffer_fetch_id_q[i];
-    end
-
-    if (prefetch_buffer_to_inst_buffer) begin
-      inst_buffer_fetch_id_d[inst_buffer_insert_index] = fetch_id_q;
-      fetch_id_d = fetch_id_q + 1;
-    end
-  end
-
-  always_ff @(posedge clk_i or negedge rst_ni) begin
-    if (!rst_ni) begin
-      fetch_id_q <= 'd0;
-    end else begin
-      fetch_id_q <= fetch_id_d;
+    always_comb begin
+      fetch_id_d = fetch_id_q;
       for (int i=0; i<DEPTH; i++) begin
-        inst_buffer_fetch_id_q[i] <= inst_buffer_fetch_id_d[i];
+        inst_buffer_fetch_id_d[i] = inst_buffer_fetch_id_q[i];
+      end
+
+      if (prefetch_buffer_to_inst_buffer) begin
+        inst_buffer_fetch_id_d[inst_buffer_insert_index] = fetch_id_q;
+        fetch_id_d = fetch_id_q + 1;
       end
     end
-  end
 
-  assign fetch_id_idex = inst_buffer_fetch_id_q[inst_buffer_remove_index];
-`else
-  assign fetch_id_idex = 'd0;
-`endif
+    always_ff @(posedge clk_i or negedge rst_ni) begin
+      if (!rst_ni) begin
+        fetch_id_q <= 'd0;
+      end else begin
+        fetch_id_q <= fetch_id_d;
+        for (int i=0; i<DEPTH; i++) begin
+          inst_buffer_fetch_id_q[i] <= inst_buffer_fetch_id_d[i];
+        end
+      end
+    end
+
+    assign fetch_id_idex = inst_buffer_fetch_id_q[inst_buffer_remove_index];
+  end else begin
+    assign fetch_id_idex = 'd0;
+  end
 
 endmodule
