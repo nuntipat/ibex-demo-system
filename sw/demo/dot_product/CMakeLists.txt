@@ -1,0 +1,1 @@
+add_prog(dot_product main.c)
