@@ -107,8 +107,8 @@ module shufflev_prefetch_buffer #(
   assign prefetch_buffer_rdata_load_or_store = (prefetch_buffer_rdata_uncompress[6:0] == 7'b0000011)  // load 
                                             || (prefetch_buffer_rdata_uncompress[6:0] == 7'b0100011); // store
   
-  logic prefetch_buffer_rdata_ecall_ebreak;
-  assign prefetch_buffer_rdata_ecall_ebreak = (prefetch_buffer_rdata_uncompress[6:0] == 7'b1110011) && (prefetch_buffer_rdata_uncompress[14:12] == 3'd0);
+  logic prefetch_buffer_rdata_env_csr;
+  assign prefetch_buffer_rdata_env_csr = (prefetch_buffer_rdata_uncompress[6:0] == 7'b1110011);
 
   logic         discard_prefetch_buffer_d, discard_prefetch_buffer_q; // assert to prevent reading from the prefetch buffer as the previous instruction may change PC
   logic [31:0]  latest_branch_pc_d, latest_branch_pc_q;               // address of the last branch instruction that assert `discard_prefetch_buffer_q`
@@ -258,6 +258,7 @@ module shufflev_prefetch_buffer #(
   logic [DEPTH-1:0] [NUM_PHYSICAL_REGS-1:0]         inst_buffer_physical_reg_usage_d, inst_buffer_physical_reg_usage_q; // indicate which physical register is begin used by this instruction (bit vector format)
   logic [DEPTH-1:0] [DEPTH-1:0]                     inst_buffer_dependency_d, inst_buffer_dependency_q;       // indicate which instruction does this instruction depends on
   logic [DEPTH-1:0]                                 inst_buffer_is_load_store_d, inst_buffer_is_load_store_q; // indicate whether this instruction is a load/store
+  logic [DEPTH-1:0]                                 inst_buffer_is_env_csr_d, inst_buffer_is_env_csr_q;       // indicate whether this instruction is an environment/csr instruction (ecall/ebreak/csr.../wfi)
 
   logic [NUM_LOGICAL_REGS-1:0] [NUM_PHYSICAL_REGS_NUM_BIT-1:0] logical_to_physical_reg_d, logical_to_physical_reg_q; // store the mapping between logical to physical register (binary format)
   logic [NUM_PHYSICAL_REGS-1:0]                                physical_reg_reserved_d, physical_reg_reserved_q;     // keep track of physical registers currently reserved
@@ -291,6 +292,7 @@ module shufflev_prefetch_buffer #(
       inst_buffer_physical_reg_usage_d[i] = inst_buffer_physical_reg_usage_q[i];
       inst_buffer_dependency_d[i] = inst_buffer_dependency_q[i];
       inst_buffer_is_load_store_d[i] = inst_buffer_is_load_store_q[i];
+      inst_buffer_is_env_csr_d[i] = inst_buffer_is_env_csr_q[i];
     end
     for (int i=0; i<NUM_LOGICAL_REGS; i++) begin
       logical_to_physical_reg_d[i] = logical_to_physical_reg_q[i];
@@ -338,8 +340,12 @@ module shufflev_prefetch_buffer #(
           if (inst_buffer_is_load_store_q[i] && prefetch_buffer_rdata_load_or_store) begin
             inst_buffer_dependency_d[inst_buffer_insert_index][i] = 1'b1;
           end
-          // all ecall/ebreak/wfi instructions should be executed after all prior instructions has been completed
-          if (prefetch_buffer_rdata_ecall_ebreak) begin
+          // all environment/csr instructions should be executed after all prior instructions has been completed
+          if (prefetch_buffer_rdata_env_csr) begin
+            inst_buffer_dependency_d[inst_buffer_insert_index][i] = 1'b1;
+          end
+          // all instruction after environment/csr instruction should be executed after the environment/csr instruction
+          if (inst_buffer_is_env_csr_q[i]) begin
             inst_buffer_dependency_d[inst_buffer_insert_index][i] = 1'b1;
           end
         end
@@ -348,6 +354,7 @@ module shufflev_prefetch_buffer #(
       inst_buffer_dependency_d[inst_buffer_insert_index][inst_buffer_insert_index] = 1'b0;
 
       inst_buffer_is_load_store_d[inst_buffer_insert_index] = prefetch_buffer_rdata_load_or_store;
+      inst_buffer_is_env_csr_d[inst_buffer_insert_index] = prefetch_buffer_rdata_env_csr;
     end
   end
 
@@ -371,6 +378,7 @@ module shufflev_prefetch_buffer #(
         inst_buffer_physical_reg_usage_q[i] <= inst_buffer_physical_reg_usage_d[i];
         inst_buffer_dependency_q[i] <= inst_buffer_dependency_d[i];
         inst_buffer_is_load_store_q[i] <= inst_buffer_is_load_store_d[i];
+        inst_buffer_is_env_csr_q[i] <= inst_buffer_is_env_csr_d[i];
       end
       for (int i=0; i<NUM_LOGICAL_REGS; i++) begin
         logical_to_physical_reg_q[i] <= logical_to_physical_reg_d[i];
