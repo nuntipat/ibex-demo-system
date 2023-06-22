@@ -101,7 +101,9 @@ module shufflev_prefetch_buffer #(
                                                   || (prefetch_buffer_rdata_uncompress[6:0] == 7'b1100011) // bxxx
                                                   || (prefetch_buffer_rdata_uncompress[6:0] == 7'b0001111) // fench
                                                   || (prefetch_buffer_rdata_uncompress[6:0] == 7'b1110011 
-                                                      && prefetch_buffer_rdata_uncompress[14:12] == 3'd0);  // ecall / ebreak
+                                                      && prefetch_buffer_rdata_uncompress[14:12] == 3'd0
+                                                      && (prefetch_buffer_rdata_uncompress[22:21] == 2'b00         // ecall / ebreak
+                                                          || prefetch_buffer_rdata_uncompress[22:21] == 2'b01));   // sret / mret TODO: check sfence.vma  
 
   logic prefetch_buffer_rdata_load_or_store;
   assign prefetch_buffer_rdata_load_or_store = (prefetch_buffer_rdata_uncompress[6:0] == 7'b0000011)  // load 
@@ -151,6 +153,49 @@ module shufflev_prefetch_buffer #(
     end
   end
 
+  /* Detect branch request due to interrupt or exception */
+
+  logic branch_i_q;
+  logic latest_branch_pc_just_executed_q2;
+  
+  always_ff @(posedge clk_i) begin
+    branch_i_q <= branch_i;
+    latest_branch_pc_just_executed_q2 <= latest_branch_pc_just_executed_q;
+  end
+
+  // branch_i will be asserted in the next cycle after jump instruction is sent to the ID/EX stage and in the next two cycle in case of a branch instruction.
+  // branch_i will not be asserted in two consecutive cycle because when branch is taken, we must get the new PC, fetch new instruction and sent to ID/EX
+  // TODO: can interrupt happen in the cycle that we expect branch?
+  logic interrupt_or_exception_jump_request;
+  assign interrupt_or_exception_jump_request = (branch_i && branch_i_q) || (branch_i && !latest_branch_pc_just_executed_q && !latest_branch_pc_just_executed_q2);
+
+  /* Detect and handler wfi instruction */
+
+  logic         pre_fetch_inst_is_wfi;  // assert when the previous instruction retrieve from the prefetch buffer is the wfi instruction
+  logic [31:0]  next_pc_after_wfi;      // record the pc value of the instruction after wfi
+
+  always_ff @(posedge clk_i) begin
+    if (prefetch_buffer_to_inst_buffer) begin
+      pre_fetch_inst_is_wfi <= (prefetch_buffer_rdata_uncompress == 32'h1050_0073);
+    end
+    if (pre_fetch_inst_is_wfi) begin
+      next_pc_after_wfi <= ibex_prefetch_buffer_addr_o;
+    end
+  end
+
+  logic prev_inst_to_idex_is_wfi;   // After the wfi instruction is executed, the core will be sleep until interrupt occur which will assert branch_i to jump to ISR
+                                    // In the same cycle that branch_i is asserted, the core will record the PC value to mepc so that it knows where to return after MRET
+                                    // Thus, we need to force addr_o to be the next PC value after the wfi instruction instead of some random instructions from the instruction buffer
+
+  always_ff @(posedge clk_i) begin
+    if (ready_i && valid_o) begin
+      prev_inst_to_idex_is_wfi <= (rdata_o == 32'h1050_0073);
+    end
+    if (branch_i) begin
+      prev_inst_to_idex_is_wfi <= 1'b0;
+    end
+  end
+
   /* Transfer from prefetch buffer to shuffling buffer (inst_buffer_...) and from shuffling buffer to the ID/EX stage */
 
   logic [DEPTH-1:0] [31:0]    inst_buffer_addr_d, inst_buffer_addr_q;               // PC value
@@ -184,6 +229,13 @@ module shufflev_prefetch_buffer #(
 
     ibex_prefetch_buffer_ready_i = 1'b0;
 
+    // flush the instruction buffer when received branch request (branch_i=1) due to interrupt or exception
+    if (interrupt_or_exception_jump_request) begin
+      for (int i=0; i<DEPTH; i++) begin
+        inst_buffer_valid_d[i] = 1'b0;
+      end
+    end
+
     // remove entry from the instruction buffer after it was sent to the ID/EX stage. we should remove the instruction first before adding a new one 
     // as start_ptr and end_ptr may point to the same entry and the valid bit should end up being set when we remove and add instruction in the same cycle
     if (inst_buffer_to_id_ex) begin
@@ -207,7 +259,7 @@ module shufflev_prefetch_buffer #(
   assign rdata_rd_o = inst_buffer_rd_physical_q[inst_buffer_remove_index];
   assign rdata_rs1_o = inst_buffer_rs1_physical_q[inst_buffer_remove_index];
   assign rdata_rs2_o = inst_buffer_rs2_physical_q[inst_buffer_remove_index];
-  assign addr_o = inst_buffer_addr_q[inst_buffer_remove_index];
+  assign addr_o = prev_inst_to_idex_is_wfi ? next_pc_after_wfi : inst_buffer_addr_q[inst_buffer_remove_index];  // see comment above regarding prev_inst_to_idex_is_wfi
   assign err_o = 1'b0;
   assign err_plus2_o = 1'b0;
 
@@ -298,6 +350,12 @@ module shufflev_prefetch_buffer #(
       logical_to_physical_reg_d[i] = logical_to_physical_reg_q[i];
     end
     physical_reg_reserved_d = physical_reg_reserved_q;
+
+    if (interrupt_or_exception_jump_request) begin
+      for (int i=0; i<DEPTH; i++) begin
+        inst_buffer_physical_reg_usage_d[i] = 'd0;
+      end
+    end
 
     if (inst_buffer_to_id_ex) begin
       // clear inst_buffer_physical_reg_usage_ so the system known which physical register is not being refer to by instruction in the instruction buffer 
