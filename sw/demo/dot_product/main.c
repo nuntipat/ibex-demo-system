@@ -17,7 +17,7 @@ int main(void)
 
         // send input back to host for verification
         for (int i=0; i<10; i++) {
-            putchar(a[i]);
+            uart_out(DEFAULT_UART, a[i]);
         }
 
         // perform calulation
