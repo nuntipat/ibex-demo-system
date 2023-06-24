@@ -109,8 +109,8 @@ module shufflev_prefetch_buffer #(
   assign prefetch_buffer_rdata_load_or_store = (prefetch_buffer_rdata_uncompress[6:0] == 7'b0000011)  // load 
                                             || (prefetch_buffer_rdata_uncompress[6:0] == 7'b0100011); // store
   
-  logic prefetch_buffer_rdata_env_csr;
-  assign prefetch_buffer_rdata_env_csr = (prefetch_buffer_rdata_uncompress[6:0] == 7'b1110011);
+  logic prefetch_buffer_rdata_synch_env_csr;
+  assign prefetch_buffer_rdata_synch_env_csr = (prefetch_buffer_rdata_uncompress[6:0] == 7'b1110011) || (prefetch_buffer_rdata_uncompress[6:0] == 7'b0001111);
 
   logic         discard_prefetch_buffer_d, discard_prefetch_buffer_q; // assert to prevent reading from the prefetch buffer as the previous instruction may change PC
   logic [31:0]  latest_branch_pc_d, latest_branch_pc_q;               // address of the last branch instruction that assert `discard_prefetch_buffer_q`
@@ -398,11 +398,11 @@ module shufflev_prefetch_buffer #(
           if (inst_buffer_is_load_store_q[i] && prefetch_buffer_rdata_load_or_store) begin
             inst_buffer_dependency_d[inst_buffer_insert_index][i] = 1'b1;
           end
-          // all environment/csr instructions should be executed after all prior instructions has been completed
-          if (prefetch_buffer_rdata_env_csr) begin
+          // all synchronization/environment/csr instructions should be executed after all prior instructions has been completed
+          if (prefetch_buffer_rdata_synch_env_csr) begin
             inst_buffer_dependency_d[inst_buffer_insert_index][i] = 1'b1;
           end
-          // all instruction after environment/csr instruction should be executed after the environment/csr instruction
+          // all instruction after synchronization/environment/csr instruction should be executed after the synchronization/environment/csr instruction
           if (inst_buffer_is_env_csr_q[i]) begin
             inst_buffer_dependency_d[inst_buffer_insert_index][i] = 1'b1;
           end
@@ -412,7 +412,7 @@ module shufflev_prefetch_buffer #(
       inst_buffer_dependency_d[inst_buffer_insert_index][inst_buffer_insert_index] = 1'b0;
 
       inst_buffer_is_load_store_d[inst_buffer_insert_index] = prefetch_buffer_rdata_load_or_store;
-      inst_buffer_is_env_csr_d[inst_buffer_insert_index] = prefetch_buffer_rdata_env_csr;
+      inst_buffer_is_env_csr_d[inst_buffer_insert_index] = prefetch_buffer_rdata_synch_env_csr;
     end
   end
 
