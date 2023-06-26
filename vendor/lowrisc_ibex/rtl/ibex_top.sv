@@ -38,7 +38,10 @@ module ibex_top import ibex_pkg::*; #(
   // Default seed and nonce for scrambling
   parameter logic [SCRAMBLE_KEY_W-1:0]   RndCnstIbexKey   = RndCnstIbexKeyDefault,
   parameter logic [SCRAMBLE_NONCE_W-1:0] RndCnstIbexNonce = RndCnstIbexNonceDefault,
-  parameter int unsigned NumPhysicalRegs   = 64
+  parameter int unsigned    ShuffleBuffSize   = 4,
+  parameter int unsigned    NumPhysicalRegs   = 64,
+  parameter shufflev_rng_e  RngType           = RandomTkacik,
+  parameter int unsigned    RngSeed           = 123456
 ) (
   // Clock and Reset
   input  logic                         clk_i,
@@ -307,7 +310,10 @@ module ibex_top import ibex_pkg::*; #(
     .MemDataWidth     (MemDataWidth),
     .DmHaltAddr       (DmHaltAddr),
     .DmExceptionAddr  (DmExceptionAddr),
-    .NumPhysicalRegs  (NumPhysicalRegs)
+    .ShuffleBuffSize   (ShuffleBuffSize),
+    .NumPhysicalRegs   (NumPhysicalRegs),
+    .RngType           (RngType),
+    .RngSeed           (RngSeed)
   ) u_ibex_core (
     .clk_i(clk),
     .rst_ni,

@@ -43,7 +43,10 @@ module ibex_core import ibex_pkg::*; #(
   parameter int unsigned MemDataWidth      = MemECC ? 32 + 7 : 32,
   parameter int unsigned DmHaltAddr        = 32'h1A110800,
   parameter int unsigned DmExceptionAddr   = 32'h1A110808,
-  parameter int unsigned NumPhysicalRegs   = 64
+  parameter int unsigned    ShuffleBuffSize   = 4,
+  parameter int unsigned    NumPhysicalRegs   = 64,
+  parameter shufflev_rng_e  RngType           = RandomTkacik,
+  parameter int unsigned    RngSeed           = 123456
 ) (
   // Clock and Reset
   input  logic                         clk_i,
@@ -423,7 +426,10 @@ module ibex_core import ibex_pkg::*; #(
     .BranchPredictor  (BranchPredictor),
     .MemECC           (MemECC),
     .MemDataWidth     (MemDataWidth),
-    .NumPhysicalRegs(NumPhysicalRegs)
+    .ShuffleBuffSize   (ShuffleBuffSize),
+    .NumPhysicalRegs   (NumPhysicalRegs),
+    .RngType           (RngType),
+    .RngSeed           (RngSeed)
   ) if_stage_i (
     .clk_i (clk_i),
     .rst_ni(rst_ni),

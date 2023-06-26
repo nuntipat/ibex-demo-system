@@ -1,7 +1,6 @@
 // Copyright lowRISC contributors.
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
-
 // The Ibex demo system, which instantiates and connects the following blocks:
 // - Memory bus.
 // - Ibex top module.
@@ -11,11 +10,15 @@
 // - Timer.
 // - Debug module.
 // - SPI for driving LCD screen
-module ibex_demo_system #(
+module ibex_demo_system import ibex_pkg::*; #(
   parameter int GpiWidth     = 8,
   parameter int GpoWidth     = 16,
   parameter int PwmWidth     = 12,
-  parameter     SRAMInitFile = ""
+  parameter     SRAMInitFile = "",
+  parameter int unsigned    ShuffleBuffSize   = 4,
+  parameter int unsigned    NumPhysicalRegs   = 64,
+  parameter shufflev_rng_e  RngType           = RandomTkacik,
+  parameter int unsigned    RngSeed           = 123456
 ) (
   input logic                 clk_sys_i,
   input logic                 rst_sys_ni,
@@ -232,7 +235,11 @@ module ibex_demo_system #(
     .DbgTriggerEn    ( DbgTriggerEn                            ),
     .DbgHwBreakNum   ( DbgHwBreakNum                           ),
     .DmHaltAddr      ( DEBUG_START + dm::HaltAddress[31:0]     ),
-    .DmExceptionAddr ( DEBUG_START + dm::ExceptionAddress[31:0])
+    .DmExceptionAddr ( DEBUG_START + dm::ExceptionAddress[31:0]),
+    .ShuffleBuffSize (ShuffleBuffSize),
+    .NumPhysicalRegs (NumPhysicalRegs),
+    .RngType         (RngType),
+    .RngSeed         (RngSeed)
   ) u_top (
     .clk_i (clk_sys_i),
     .rst_ni(rst_core_n),

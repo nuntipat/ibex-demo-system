@@ -1,10 +1,10 @@
-`include "shufflev_constant.sv"
 
-module shufflev_prefetch_buffer #(
+module shufflev_prefetch_buffer import ibex_pkg::*; #(
   parameter bit             ResetAll          = 1'b0,
-  parameter int unsigned    DEPTH             = 4,
-  parameter int unsigned    NUM_PHYSICAL_REGS = 64,
+  parameter int unsigned    ShuffleBuffSize   = 4,
+  parameter int unsigned    NumPhysicalRegs   = 64,
   parameter shufflev_rng_e  RngType           = RandomTkacik,
+  parameter int unsigned    RngSeed           = 123456,
   parameter bit             EnableFetchId     = 1'b0
 ) (
   input  logic        clk_i,
@@ -20,9 +20,9 @@ module shufflev_prefetch_buffer #(
   output logic        valid_o,
   output logic        is_compress_o,
   output logic [31:0] rdata_o,
-  output logic [NUM_PHYSICAL_REGS_NUM_BIT-1:0] rdata_rd_o,
-  output logic [NUM_PHYSICAL_REGS_NUM_BIT-1:0] rdata_rs1_o,
-  output logic [NUM_PHYSICAL_REGS_NUM_BIT-1:0] rdata_rs2_o,
+  output logic [NumPhysicalRegsNumBits-1:0] rdata_rd_o,
+  output logic [NumPhysicalRegsNumBits-1:0] rdata_rs1_o,
+  output logic [NumPhysicalRegsNumBits-1:0] rdata_rs2_o,
   output logic [31:0] addr_o,
   output logic        err_o,        
   output logic        err_plus2_o,  // error is caused by the second half of an unaligned uncompressed instruction
@@ -39,10 +39,10 @@ module shufflev_prefetch_buffer #(
   output logic        busy_o    // avoid clock gate
 );
 
-  localparam int unsigned DEPTH_NUM_BIT = $clog2(DEPTH);
-  localparam int unsigned NUM_PHYSICAL_REGS_NUM_BIT = $clog2(NUM_PHYSICAL_REGS);
-  localparam int unsigned NUM_LOGICAL_REGS = 32;
-  localparam int unsigned NUM_LOGICAL_REGS_NUM_BIT = 5; // RV32I contains 32 logical register
+  localparam int unsigned ShuffleBuffSizeNumBits = $clog2(ShuffleBuffSize);
+  localparam int unsigned NumPhysicalRegsNumBits = $clog2(NumPhysicalRegs);
+  localparam int unsigned NumLogicalRegs = 32;
+  localparam int unsigned NumLogicalRegsNumBits = 5; // RV32I contains 32 logical register
 
   /* Instantiate ibex prefetch buffer */
 
@@ -198,10 +198,10 @@ module shufflev_prefetch_buffer #(
 
   /* Transfer from prefetch buffer to shuffling buffer (inst_buffer_...) and from shuffling buffer to the ID/EX stage */
 
-  logic [DEPTH-1:0] [31:0]    inst_buffer_addr_d, inst_buffer_addr_q;               // PC value
-  logic [DEPTH-1:0] [31:0]    inst_buffer_data_d, inst_buffer_data_q;               // uncompress instruction to be sent to the ID/EX stage
-  logic [DEPTH-1:0]           inst_buffer_is_compress_d, inst_buffer_is_compress_q; // indicate whether the instruction is originally a compress instruction or not
-  logic [DEPTH-1:0]           inst_buffer_valid_d, inst_buffer_valid_q;             // indicate whether the entry in the buffer is valid or not
+  logic [ShuffleBuffSize-1:0] [31:0]    inst_buffer_addr_d, inst_buffer_addr_q;               // PC value
+  logic [ShuffleBuffSize-1:0] [31:0]    inst_buffer_data_d, inst_buffer_data_q;               // uncompress instruction to be sent to the ID/EX stage
+  logic [ShuffleBuffSize-1:0]           inst_buffer_is_compress_d, inst_buffer_is_compress_q; // indicate whether the instruction is originally a compress instruction or not
+  logic [ShuffleBuffSize-1:0]           inst_buffer_valid_d, inst_buffer_valid_q;             // indicate whether the entry in the buffer is valid or not
 
   logic                       inst_buffer_full, inst_buffer_not_empty;
   assign inst_buffer_full = &inst_buffer_valid_q;
@@ -220,7 +220,7 @@ module shufflev_prefetch_buffer #(
   assign inst_buffer_to_id_ex = ready_i && valid_o;
 
   always_comb begin
-    for (int i=0; i<DEPTH; i++) begin
+    for (int i=0; i<ShuffleBuffSize; i++) begin
       inst_buffer_addr_d[i] = inst_buffer_addr_q[i];
       inst_buffer_data_d[i] = inst_buffer_data_q[i];
       inst_buffer_is_compress_d[i] = inst_buffer_is_compress_q[i];
@@ -231,7 +231,7 @@ module shufflev_prefetch_buffer #(
 
     // flush the instruction buffer when received branch request (branch_i=1) due to interrupt or exception
     if (interrupt_or_exception_jump_request) begin
-      for (int i=0; i<DEPTH; i++) begin
+      for (int i=0; i<ShuffleBuffSize; i++) begin
         inst_buffer_valid_d[i] = 1'b0;
       end
     end
@@ -265,11 +265,11 @@ module shufflev_prefetch_buffer #(
 
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
-      for (int i=0; i<DEPTH; i++) begin
+      for (int i=0; i<ShuffleBuffSize; i++) begin
         inst_buffer_valid_q[i] <= 1'b0;
       end
     end else begin
-      for (int i=0; i<DEPTH; i++) begin
+      for (int i=0; i<ShuffleBuffSize; i++) begin
         inst_buffer_addr_q[i] <= inst_buffer_addr_d[i];
         inst_buffer_data_q[i] <= inst_buffer_data_d[i];
         inst_buffer_is_compress_q[i] <= inst_buffer_is_compress_d[i];
@@ -280,7 +280,7 @@ module shufflev_prefetch_buffer #(
 
   /* Dependency tracking logic */
 
-  logic [NUM_LOGICAL_REGS_NUM_BIT-1:0] current_uncompressed_opcode_rd, current_uncompressed_opcode_rs1, current_uncompressed_opcode_rs2;
+  logic [NumLogicalRegsNumBits-1:0] current_uncompressed_opcode_rd, current_uncompressed_opcode_rs1, current_uncompressed_opcode_rs2;
   assign current_uncompressed_opcode_rd = prefetch_buffer_rdata_uncompress[11:7];
   assign current_uncompressed_opcode_rs1 = prefetch_buffer_rdata_uncompress[19:15];
   assign current_uncompressed_opcode_rs2 = prefetch_buffer_rdata_uncompress[24:20];
@@ -304,40 +304,40 @@ module shufflev_prefetch_buffer #(
                                             || (prefetch_buffer_rdata_uncompress[6:2] == 5'b01000)  // S-type
                                             || (prefetch_buffer_rdata_uncompress[6:2] == 5'b01100); // R-type
 
-  logic [DEPTH-1:0] [NUM_PHYSICAL_REGS_NUM_BIT-1:0] inst_buffer_rd_physical_d, inst_buffer_rd_physical_q;     // physical RD index (binary format)
-  logic [DEPTH-1:0] [NUM_PHYSICAL_REGS_NUM_BIT-1:0] inst_buffer_rs1_physical_d, inst_buffer_rs1_physical_q;   // physical RS1 index (binary format)
-  logic [DEPTH-1:0] [NUM_PHYSICAL_REGS_NUM_BIT-1:0] inst_buffer_rs2_physical_d, inst_buffer_rs2_physical_q;   // physical RS2 index (binary format)
-  logic [DEPTH-1:0] [NUM_PHYSICAL_REGS-1:0]         inst_buffer_physical_reg_usage_d, inst_buffer_physical_reg_usage_q; // indicate which physical register is begin used by this instruction (bit vector format)
-  logic [DEPTH-1:0] [DEPTH-1:0]                     inst_buffer_dependency_d, inst_buffer_dependency_q;       // indicate which instruction does this instruction depends on
-  logic [DEPTH-1:0]                                 inst_buffer_is_load_store_d, inst_buffer_is_load_store_q; // indicate whether this instruction is a load/store
-  logic [DEPTH-1:0]                                 inst_buffer_is_env_csr_d, inst_buffer_is_env_csr_q;       // indicate whether this instruction is an environment/csr instruction (ecall/ebreak/csr.../wfi)
+  logic [ShuffleBuffSize-1:0] [NumPhysicalRegsNumBits-1:0] inst_buffer_rd_physical_d, inst_buffer_rd_physical_q;     // physical RD index (binary format)
+  logic [ShuffleBuffSize-1:0] [NumPhysicalRegsNumBits-1:0] inst_buffer_rs1_physical_d, inst_buffer_rs1_physical_q;   // physical RS1 index (binary format)
+  logic [ShuffleBuffSize-1:0] [NumPhysicalRegsNumBits-1:0] inst_buffer_rs2_physical_d, inst_buffer_rs2_physical_q;   // physical RS2 index (binary format)
+  logic [ShuffleBuffSize-1:0] [NumPhysicalRegs-1:0]         inst_buffer_physical_reg_usage_d, inst_buffer_physical_reg_usage_q; // indicate which physical register is begin used by this instruction (bit vector format)
+  logic [ShuffleBuffSize-1:0] [ShuffleBuffSize-1:0]                     inst_buffer_dependency_d, inst_buffer_dependency_q;       // indicate which instruction does this instruction depends on
+  logic [ShuffleBuffSize-1:0]                                 inst_buffer_is_load_store_d, inst_buffer_is_load_store_q; // indicate whether this instruction is a load/store
+  logic [ShuffleBuffSize-1:0]                                 inst_buffer_is_env_csr_d, inst_buffer_is_env_csr_q;       // indicate whether this instruction is an environment/csr instruction (ecall/ebreak/csr.../wfi)
 
-  logic [NUM_LOGICAL_REGS-1:0] [NUM_PHYSICAL_REGS_NUM_BIT-1:0] logical_to_physical_reg_d, logical_to_physical_reg_q; // store the mapping between logical to physical register (binary format)
-  logic [NUM_PHYSICAL_REGS-1:0]                                physical_reg_reserved_d, physical_reg_reserved_q;     // keep track of physical registers currently reserved
+  logic [NumLogicalRegs-1:0] [NumPhysicalRegsNumBits-1:0] logical_to_physical_reg_d, logical_to_physical_reg_q; // store the mapping between logical to physical register (binary format)
+  logic [NumPhysicalRegs-1:0]                                physical_reg_reserved_d, physical_reg_reserved_q;     // keep track of physical registers currently reserved
                                                                                                                      // (this contain identical data to logical_to_physical_reg_* but in bit vector format)
                                                                                                                             
 
   // find the first avilable physical register by performing OR between physical_reg_reserved_q and each element of inst_buffer_physical_reg_usage_q and find the index of the rightmost 0
   // we perform OR because some physical registers might not be reserved currently but they stores data refer to by some instructions in the inst_buffer thus is not available
-  logic [NUM_PHYSICAL_REGS-1:0]         physical_reg_in_used;
-  logic [NUM_PHYSICAL_REGS_NUM_BIT-1:0] first_available_physical_reg_id;
+  logic [NumPhysicalRegs-1:0]         physical_reg_in_used;
+  logic [NumPhysicalRegsNumBits-1:0] first_available_physical_reg_id;
   always_comb begin
     physical_reg_in_used = physical_reg_reserved_q;
-    for (int i=0; i<DEPTH; i++) begin
+    for (int i=0; i<ShuffleBuffSize; i++) begin
       // we can avoid AND with the valid bit as `inst_buffer_physical_reg_usage_` is clear when the instruction is removed from the buffer
-      physical_reg_in_used |= inst_buffer_physical_reg_usage_q[i] /*& {NUM_PHYSICAL_REGS{inst_buffer_valid_q[i]}}*/; 
+      physical_reg_in_used |= inst_buffer_physical_reg_usage_q[i] /*& {NumPhysicalRegs{inst_buffer_valid_q[i]}}*/; 
     end
 
     first_available_physical_reg_id = 'd0;
-    for (int i=NUM_PHYSICAL_REGS-1; i>=0; i--) begin
+    for (int i=NumPhysicalRegs-1; i>=0; i--) begin
       if (!physical_reg_in_used[i]) begin
-        first_available_physical_reg_id = NUM_PHYSICAL_REGS_NUM_BIT'(i);
+        first_available_physical_reg_id = NumPhysicalRegsNumBits'(i);
       end
     end
   end
 
   always_comb begin
-    for (int i=0; i<DEPTH; i++) begin
+    for (int i=0; i<ShuffleBuffSize; i++) begin
       inst_buffer_rd_physical_d[i] = inst_buffer_rd_physical_q[i];
       inst_buffer_rs1_physical_d[i] = inst_buffer_rs1_physical_q[i];
       inst_buffer_rs2_physical_d[i] = inst_buffer_rs2_physical_q[i];
@@ -346,13 +346,13 @@ module shufflev_prefetch_buffer #(
       inst_buffer_is_load_store_d[i] = inst_buffer_is_load_store_q[i];
       inst_buffer_is_env_csr_d[i] = inst_buffer_is_env_csr_q[i];
     end
-    for (int i=0; i<NUM_LOGICAL_REGS; i++) begin
+    for (int i=0; i<NumLogicalRegs; i++) begin
       logical_to_physical_reg_d[i] = logical_to_physical_reg_q[i];
     end
     physical_reg_reserved_d = physical_reg_reserved_q;
 
     if (interrupt_or_exception_jump_request) begin
-      for (int i=0; i<DEPTH; i++) begin
+      for (int i=0; i<ShuffleBuffSize; i++) begin
         inst_buffer_physical_reg_usage_d[i] = 'd0;
       end
     end
@@ -361,7 +361,7 @@ module shufflev_prefetch_buffer #(
       // clear inst_buffer_physical_reg_usage_ so the system known which physical register is not being refer to by instruction in the instruction buffer 
       inst_buffer_physical_reg_usage_d[inst_buffer_remove_index] = 'd0;
       // clear the dependency bit of other instructions that depends on this instruction
-      for (int i=0; i<DEPTH; i++) begin
+      for (int i=0; i<ShuffleBuffSize; i++) begin
         inst_buffer_dependency_d[i][inst_buffer_remove_index] = 1'b0;
       end
     end
@@ -387,7 +387,7 @@ module shufflev_prefetch_buffer #(
       
       // check which instructions that this instruction depends on
       inst_buffer_dependency_d[inst_buffer_insert_index] = 'd0;
-      for (int i=0; i<DEPTH; i++) begin
+      for (int i=0; i<ShuffleBuffSize; i++) begin
         // TODO: handle syscall (rd2) and ecall/ebreak
         if (inst_buffer_valid_q[i]) begin
           if ((inst_buffer_rd_physical_q[i] != 'd0) && (inst_buffer_rd_physical_q[i] == inst_buffer_rs1_physical_d[inst_buffer_insert_index]
@@ -418,18 +418,18 @@ module shufflev_prefetch_buffer #(
 
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
-      for (int i=0; i<DEPTH; i++) begin
+      for (int i=0; i<ShuffleBuffSize; i++) begin
         inst_buffer_physical_reg_usage_q[i] <= 'd0;
       end
-      for (int i=0; i<NUM_LOGICAL_REGS; i++) begin
-        logical_to_physical_reg_q[i] <= NUM_PHYSICAL_REGS_NUM_BIT'(i);
+      for (int i=0; i<NumLogicalRegs; i++) begin
+        logical_to_physical_reg_q[i] <= NumPhysicalRegsNumBits'(i);
         physical_reg_reserved_q[i] <= 1'b1;
       end
-      for (int i=NUM_LOGICAL_REGS; i<NUM_PHYSICAL_REGS; i++) begin
+      for (int i=NumLogicalRegs; i<NumPhysicalRegs; i++) begin
         physical_reg_reserved_q[i] <= 1'b0;
       end
     end else begin
-      for (int i=0; i<DEPTH; i++) begin
+      for (int i=0; i<ShuffleBuffSize; i++) begin
         inst_buffer_rd_physical_q[i] <= inst_buffer_rd_physical_d[i];
         inst_buffer_rs1_physical_q[i] <= inst_buffer_rs1_physical_d[i];
         inst_buffer_rs2_physical_q[i] <= inst_buffer_rs2_physical_d[i];
@@ -438,10 +438,10 @@ module shufflev_prefetch_buffer #(
         inst_buffer_is_load_store_q[i] <= inst_buffer_is_load_store_d[i];
         inst_buffer_is_env_csr_q[i] <= inst_buffer_is_env_csr_d[i];
       end
-      for (int i=0; i<NUM_LOGICAL_REGS; i++) begin
+      for (int i=0; i<NumLogicalRegs; i++) begin
         logical_to_physical_reg_q[i] <= logical_to_physical_reg_d[i];
       end
-      for (int i=0; i<NUM_PHYSICAL_REGS; i++) begin
+      for (int i=0; i<NumPhysicalRegs; i++) begin
         physical_reg_reserved_q[i] <= physical_reg_reserved_d[i];
       end
     end
@@ -449,7 +449,7 @@ module shufflev_prefetch_buffer #(
 
   /* Random logic */ 
 
-  logic [DEPTH-1:0] [DEPTH-1:0] [DEPTH_NUM_BIT-1:0] distance_table;   // the random number generated can't be used directly as an index to select an instruction in the instruction
+  logic [ShuffleBuffSize-1:0] [ShuffleBuffSize-1:0] [ShuffleBuffSizeNumBits-1:0] distance_table;   // the random number generated can't be used directly as an index to select an instruction in the instruction
                                                                       // buffer as it may point to an invalid entry (blank or awaiting dependent instruction etc.). Thus, we select
                                                                       // the closest entry instead using the absolute distance pre-computed in this table
 
@@ -461,31 +461,31 @@ module shufflev_prefetch_buffer #(
     //   Entry (|Dist| = 1)     4   0   1   2   3  
     //   Entry (|Dist| = 2)     2   3   4   0   1  
     //   Entry (|Dist| = 2)     3   4   0   1   2  
-    for (int c=0; c<DEPTH; c++) begin
-      distance_table[0][c] = DEPTH_NUM_BIT'(c);
-      for (int i=0; i<$ceil((DEPTH-1)/2.0); i++) begin          // odd rows:  0 +1 X +2 X ...
-        distance_table[1 + (i*2)][c] = DEPTH_NUM_BIT'((c + (i+1)) % DEPTH);
+    for (int c=0; c<ShuffleBuffSize; c++) begin
+      distance_table[0][c] = ShuffleBuffSizeNumBits'(c);
+      for (int i=0; i<$ceil((ShuffleBuffSize-1)/2.0); i++) begin          // odd rows:  0 +1 X +2 X ...
+        distance_table[1 + (i*2)][c] = ShuffleBuffSizeNumBits'((c + (i+1)) % ShuffleBuffSize);
       end
-      for (int i=0; i<(DEPTH-1)/2; i++) begin                 // even rows: 0 X -1 X -2 ...
-        distance_table[2 + (i*2)][c] = DEPTH_NUM_BIT'((c - (i+1)) >= 0 ? (c - (i+1)) : (c + DEPTH - (i+1)));
+      for (int i=0; i<(ShuffleBuffSize-1)/2; i++) begin                 // even rows: 0 X -1 X -2 ...
+        distance_table[2 + (i*2)][c] = ShuffleBuffSizeNumBits'((c - (i+1)) >= 0 ? (c - (i+1)) : (c + ShuffleBuffSize - (i+1)));
       end
     end
     // // log the content of the distance table
-    // for (int c=0; c<DEPTH; c++) begin
+    // for (int c=0; c<ShuffleBuffSize; c++) begin
     //   $display("Column %0h", c);
-    //   for (int r=0; r<DEPTH; r++) begin
+    //   for (int r=0; r<ShuffleBuffSize; r++) begin
     //     $display(distance_table[r][c]);
     //   end
     // end
   end
 
-  logic [DEPTH_NUM_BIT-1:0]   random_number;                  // random number used for selecting one column from the distance table
+  logic [ShuffleBuffSizeNumBits-1:0]   random_number;                  // random number used for selecting one column from the distance table
   logic                       random_number_valid;
 
   shufflev_rng #(
     .RngType    (RngType),
-    .RngSeed    (123456),
-    .MaxValue   (DEPTH-1)
+    .RngSeed    (RngSeed),
+    .MaxValue   (ShuffleBuffSize-1)
   ) u_shufflev_rng (
     .clk_i      (clk_i),
     .rst_ni     (rst_ni),
@@ -493,27 +493,27 @@ module shufflev_prefetch_buffer #(
     .valid_o    (random_number_valid)
   );
 
-  logic [DEPTH-1:0]           random_valid_entry;             // bit vector indicating all ready entries in the instruction buffer
+  logic [ShuffleBuffSize-1:0]           random_valid_entry;             // bit vector indicating all ready entries in the instruction buffer
                                                               // the order of the bit follow the selected column in the distance table 
-  logic [DEPTH_NUM_BIT-1:0]   random_first_valid_entry_index; // index in the `random_valid_entry` that are closest and valid 
-  logic [DEPTH_NUM_BIT-1:0]   inst_buffer_remove_index;       // index of the instruction buffer to retrieve instruction and send to the ID/EX stage
+  logic [ShuffleBuffSizeNumBits-1:0]   random_first_valid_entry_index; // index in the `random_valid_entry` that are closest and valid 
+  logic [ShuffleBuffSizeNumBits-1:0]   inst_buffer_remove_index;       // index of the instruction buffer to retrieve instruction and send to the ID/EX stage
 
   always_comb begin
-    for (int i=0; i<DEPTH; i++) begin
+    for (int i=0; i<ShuffleBuffSize; i++) begin
       random_valid_entry[i] = inst_buffer_valid_q[distance_table[i][random_number]] && !(|inst_buffer_dependency_q[distance_table[i][random_number]]); 
     end
 
     random_first_valid_entry_index = 'd0;
-    for (int i=DEPTH-1; i>=0; i--) begin
+    for (int i=ShuffleBuffSize-1; i>=0; i--) begin
       if (random_valid_entry[i]) begin
-        random_first_valid_entry_index = DEPTH_NUM_BIT'(i);
+        random_first_valid_entry_index = ShuffleBuffSizeNumBits'(i);
       end
     end
 
     inst_buffer_remove_index = distance_table[random_first_valid_entry_index][random_number];
   end
 
-  logic [DEPTH_NUM_BIT-1:0]   inst_buffer_insert_index;      // index of the instruction buffer to insert new instruction into which will be identical to `inst_buffer_remove_index`
+  logic [ShuffleBuffSizeNumBits-1:0]   inst_buffer_insert_index;      // index of the instruction buffer to insert new instruction into which will be identical to `inst_buffer_remove_index`
                                                              // if we are also removing an instruction in this cycle. Otherwise, we pick any unused entry (inst_buffer_valid_q[i] = 0)
                                                              // Note: checking the valid bit alone is not enough as the valid bit will not be updated until the next clock cycle which 
                                                              // prevent us from both removing and adding an instruction in the same cycle
@@ -523,9 +523,9 @@ module shufflev_prefetch_buffer #(
       inst_buffer_insert_index = inst_buffer_remove_index;
     end else begin
       inst_buffer_insert_index = 'd0;
-      for (int i=DEPTH-1; i>=0; i--) begin
+      for (int i=ShuffleBuffSize-1; i>=0; i--) begin
         if (!inst_buffer_valid_q[i]) begin
-          inst_buffer_insert_index = DEPTH_NUM_BIT'(i);
+          inst_buffer_insert_index = ShuffleBuffSizeNumBits'(i);
         end
       end
     end
@@ -539,11 +539,11 @@ module shufflev_prefetch_buffer #(
 
   if (EnableFetchId) begin
     logic [31:0]                fetch_id_d, fetch_id_q;
-    logic [DEPTH-1:0] [31:0]    inst_buffer_fetch_id_d, inst_buffer_fetch_id_q;       // unique sequential number for debugging purpose
+    logic [ShuffleBuffSize-1:0] [31:0]    inst_buffer_fetch_id_d, inst_buffer_fetch_id_q;       // unique sequential number for debugging purpose
 
     always_comb begin
       fetch_id_d = fetch_id_q;
-      for (int i=0; i<DEPTH; i++) begin
+      for (int i=0; i<ShuffleBuffSize; i++) begin
         inst_buffer_fetch_id_d[i] = inst_buffer_fetch_id_q[i];
       end
 
@@ -558,7 +558,7 @@ module shufflev_prefetch_buffer #(
         fetch_id_q <= 'd0;
       end else begin
         fetch_id_q <= fetch_id_d;
-        for (int i=0; i<DEPTH; i++) begin
+        for (int i=0; i<ShuffleBuffSize; i++) begin
           inst_buffer_fetch_id_q[i] <= inst_buffer_fetch_id_d[i];
         end
       end

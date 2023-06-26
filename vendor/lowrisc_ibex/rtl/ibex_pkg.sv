@@ -663,4 +663,10 @@ package ibex_pkg;
   // and core_busy signals within `ibex_core` may need adjusting.
   parameter ibex_mubi_t IbexMuBiOn  = 4'b0101;
   parameter ibex_mubi_t IbexMuBiOff = 4'b1010;
+
+  typedef enum integer {
+    RandomSim    = 0,
+    RandomTkacik = 1
+  } shufflev_rng_e;
+
 endpackage

@@ -1,6 +1,5 @@
-`include "shufflev_constant.sv"
 
-module shufflev_rng #(
+module shufflev_rng import ibex_pkg::*; #(
     parameter shufflev_rng_e RngType  = RandomTkacik,
     parameter int            RngSeed  = 123456,
     parameter int            MaxValue = 4
@@ -52,10 +51,10 @@ module shufflev_rng #(
     // otherwise, TBD
     if (!(|(MaxValue & (MaxValue + 1)))) begin
       assign number_o = rng_number_o[MAX_VALUE_NUM_BIT-1:0];
-      assign valid_o  = rng_number_valid;
+    assign valid_o  = rng_number_valid;
 
-      logic [31:MAX_VALUE_NUM_BIT] unused_rng_number_o;
-      assign unused_rng_number_o = rng_number_o[31:MAX_VALUE_NUM_BIT];
+    logic [31:MAX_VALUE_NUM_BIT] unused_rng_number_o;
+    assign unused_rng_number_o = rng_number_o[31:MAX_VALUE_NUM_BIT];
     end
   end
 

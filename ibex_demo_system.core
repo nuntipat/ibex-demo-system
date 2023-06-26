@@ -94,6 +94,23 @@ parameters:
     paramtype: vlogdefine
     description: Primitives implementation to use, e.g. "prim_pkg::ImplGeneric".
 
+  ShuffleBuffSize:
+    datatype: int
+    description: Size of the instruction shuffling buffer
+    default: 4
+    paramtype: vlogparam
+  
+  # RngType:
+  #   datatype: str
+  #   description: Type of the random number generator
+  #   paramtype: vlogparam
+  
+  RngSeed:
+    datatype: int
+    description: Random seed for shuffling the instruction
+    default: 123456
+    paramtype: vlogparam
+
 targets:
   default: &default_target
     filesets:
@@ -178,3 +195,6 @@ targets:
           - "--unroll-count 72"
     parameters:
       - PRIM_DEFAULT_IMPL=prim_pkg::ImplGeneric
+      - ShuffleBuffSize
+      # - RngType
+      - RngSeed

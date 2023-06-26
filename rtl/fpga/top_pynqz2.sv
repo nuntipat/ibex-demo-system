@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // This is the top level SystemVerilog file that connects the IO on the board to the Ibex Demo System.
-module top_pynqz2 (
+module top_pynqz2 import ibex_pkg::*; (
   // These inputs are defined in data/pins_pynqz2.xdc
   input               IO_CLK,
   input               IO_RST,
@@ -19,6 +19,10 @@ module top_pynqz2 (
   output              SPI_SCK
 );
   parameter SRAMInitFile = "";
+  parameter int unsigned    ShuffleBuffSize   = 4;
+  parameter int unsigned    NumPhysicalRegs   = 64;
+  parameter shufflev_rng_e  RngType           = RandomTkacik;
+  parameter int unsigned    RngSeed           = 123456;
 
   logic clk_sys, rst_sys_n;
 
@@ -28,6 +32,10 @@ module top_pynqz2 (
     .GpoWidth(8),
     .PwmWidth(6),
     .SRAMInitFile(SRAMInitFile)
+    .ShuffleBuffSize(ShuffleBuffSize),
+    .NumPhysicalRegs(NumPhysicalRegs),
+    .RngType(RngType),
+    .RngSeed(RngSeed)
   ) u_ibex_demo_system (
     //input
     .clk_sys_i(clk_sys),

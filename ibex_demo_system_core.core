@@ -19,7 +19,6 @@ filesets:
       - rtl/system/uart.sv
       - rtl/system/spi_host.sv
       - rtl/system/spi_top.sv
-      - rtl/system/shufflev_constant.sv : {is_include_file : true}
       - rtl/system/shufflev_prefetch_buffer.sv
       - rtl/system/shufflev_rng.sv
       - rtl/system/shufflev_rng_tkacik.sv

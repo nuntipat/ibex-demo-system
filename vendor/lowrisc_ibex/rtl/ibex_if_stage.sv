@@ -28,7 +28,10 @@ module ibex_if_stage import ibex_pkg::*; #(
   parameter bit          BranchPredictor   = 1'b0,
   parameter bit          MemECC            = 1'b0,
   parameter int unsigned MemDataWidth      = MemECC ? 32 + 7 : 32,
-  parameter int unsigned NumPhysicalRegs   = 64
+  parameter int unsigned    ShuffleBuffSize   = 4,
+  parameter int unsigned    NumPhysicalRegs   = 64,
+  parameter shufflev_rng_e  RngType           = RandomTkacik,
+  parameter int unsigned    RngSeed           = 123456
 ) (
   input  logic                         clk_i,
   input  logic                         rst_ni,
@@ -321,7 +324,10 @@ module ibex_if_stage import ibex_pkg::*; #(
     // prefetch buffer, caches a fixed number of instructions
     shufflev_prefetch_buffer #(
       .ResetAll          (ResetAll),
-      .NUM_PHYSICAL_REGS (NumPhysicalRegs)
+      .ShuffleBuffSize   (ShuffleBuffSize),
+      .NumPhysicalRegs   (NumPhysicalRegs),
+      .RngType           (RngType),
+      .RngSeed           (RngSeed),
     ) prefetch_buffer_i (
         .clk_i               ( clk_i                      ),
         .rst_ni              ( rst_ni                     ),
