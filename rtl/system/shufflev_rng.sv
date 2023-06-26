@@ -51,11 +51,20 @@ module shufflev_rng import ibex_pkg::*; #(
     // otherwise, TBD
     if (!(|(MaxValue & (MaxValue + 1)))) begin
       assign number_o = rng_number_o[MAX_VALUE_NUM_BIT-1:0];
+    end else begin
+      always_comb begin
+        if (rng_number_o[MAX_VALUE_NUM_BIT-1:0] > MAX_VALUE_NUM_BIT'(MaxValue)) begin
+          number_o = rng_number_o[MAX_VALUE_NUM_BIT-1:0] - MAX_VALUE_NUM_BIT'(MaxValue + 1);
+        end else begin
+          number_o = rng_number_o[MAX_VALUE_NUM_BIT-1:0];
+        end
+      end
+    end
+
     assign valid_o  = rng_number_valid;
 
     logic [31:MAX_VALUE_NUM_BIT] unused_rng_number_o;
     assign unused_rng_number_o = rng_number_o[31:MAX_VALUE_NUM_BIT];
-    end
   end
 
 endmodule
