@@ -33,15 +33,8 @@ module ibex_dummy_instr import ibex_pkg::*; #(
   localparam int unsigned TIMEOUT_CNT_W = 5;
   localparam int unsigned OP_W          = 5;
 
-  typedef enum logic [1:0] {
-    DUMMY_ADD = 2'b00,
-    DUMMY_MUL = 2'b01,
-    DUMMY_DIV = 2'b10,
-    DUMMY_AND = 2'b11
-  } dummy_instr_e;
-
   typedef struct packed {
-    dummy_instr_e             instr_type;
+    logic [2:0]               instr_type;
     logic [OP_W-1:0]          op_b;
     logic [OP_W-1:0]          op_a;
     logic [TIMEOUT_CNT_W-1:0] cnt;
@@ -55,8 +48,6 @@ module ibex_dummy_instr import ibex_pkg::*; #(
   logic                     lfsr_en;
   logic [LFSR_OUT_W-1:0]    lfsr_state;
   logic                     insert_dummy_instr;
-  logic [6:0]               dummy_set;
-  logic [2:0]               dummy_opcode;
   logic [31:0]              dummy_instr;
   logic [31:0]              dummy_instr_seed_q, dummy_instr_seed_d;
 
@@ -114,34 +105,8 @@ module ibex_dummy_instr import ibex_pkg::*; #(
   // Insert a dummy instruction each time the counter hits the threshold
   assign insert_dummy_instr = dummy_instr_en_i & (dummy_cnt_q == dummy_cnt_threshold);
 
-  // Encode instruction
-  always_comb begin
-    unique case (lfsr_data.instr_type)
-      DUMMY_ADD: begin
-        dummy_set    = 7'b0000000;
-        dummy_opcode = 3'b000;
-      end
-      DUMMY_MUL: begin
-        dummy_set    = 7'b0000001;
-        dummy_opcode = 3'b000;
-      end
-      DUMMY_DIV: begin
-        dummy_set    = 7'b0000001;
-        dummy_opcode = 3'b100;
-      end
-      DUMMY_AND: begin
-        dummy_set    = 7'b0000000;
-        dummy_opcode = 3'b111;
-      end
-      default: begin
-        dummy_set    = 7'b0000000;
-        dummy_opcode = 3'b000;
-      end
-    endcase
-  end
-
   //                    SET        RS2             RS1             OP            RD
-  assign dummy_instr = {dummy_set, lfsr_data.op_b, lfsr_data.op_a, dummy_opcode, 5'h00, 7'h33};
+  assign dummy_instr = {7'b0000000, lfsr_data.op_b, lfsr_data.op_a, lfsr_data.instr_type, 5'h00, 7'h33};
 
   // Assign outputs
   assign insert_dummy_instr_o = insert_dummy_instr;

@@ -403,6 +403,12 @@ module ibex_core import ibex_pkg::*; #(
   // IF stage //
   //////////////
 
+  logic unused_dummy_instr_en;
+  assign unused_dummy_instr_en = dummy_instr_en;
+
+  logic [2:0] unused_dummy_instr_mask;
+  assign unused_dummy_instr_mask = dummy_instr_mask;
+
   ibex_if_stage #(
     .DmHaltAddr       (DmHaltAddr),
     .DmExceptionAddr  (DmExceptionAddr),
@@ -472,8 +478,8 @@ module ibex_core import ibex_pkg::*; #(
     .nt_branch_mispredict_i(nt_branch_mispredict),
     .exc_pc_mux_i          (exc_pc_mux_id),
     .exc_cause             (exc_cause),
-    .dummy_instr_en_i      (dummy_instr_en),
-    .dummy_instr_mask_i    (dummy_instr_mask),
+    .dummy_instr_en_i      (1'b1),
+    .dummy_instr_mask_i    (3'b011),
     .dummy_instr_seed_en_i (dummy_instr_seed_en),
     .dummy_instr_seed_i    (dummy_instr_seed),
     .icache_enable_i       (icache_enable),
