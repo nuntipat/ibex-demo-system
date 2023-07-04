@@ -6,7 +6,8 @@ module shufflev_prefetch_buffer import ibex_pkg::*; #(
   parameter shufflev_rng_e  RngType           = RandomTkacik,
   parameter int unsigned    RngSeed           = 123456,
   parameter bit             EnableFetchId     = 1'b0,
-  parameter bit             EnableFastBranch  = 1'b1
+  parameter bit             EnableFastBranch  = 1'b1,
+  parameter int unsigned    NumBranchPredictorEntry = 16
 ) (
   input  logic        clk_i,
   input  logic        rst_ni,   // asynchronous reset
@@ -44,6 +45,7 @@ module shufflev_prefetch_buffer import ibex_pkg::*; #(
   localparam int unsigned NumPhysicalRegsNumBits = $clog2(NumPhysicalRegs);
   localparam int unsigned NumLogicalRegs = 32;
   localparam int unsigned NumLogicalRegsNumBits = 5; // RV32I contains 32 logical register
+  localparam int unsigned NumBranchPredictorEntryNumBits = $clog2(NumBranchPredictorEntry);
 
   /* Instantiate ibex prefetch buffer */
 
@@ -59,8 +61,8 @@ module shufflev_prefetch_buffer import ibex_pkg::*; #(
       .rst_ni            (rst_ni),
       .req_i             (req_i),
 
-      .branch_i          (branch_predictor_branch_request),
-      .addr_i            (branch_predictor_branch_addr),
+      .branch_i          (prefetch_predictor_branch_request),
+      .addr_i            (prefetch_predictor_branch_addr),
 
       .ready_i           (ibex_prefetch_buffer_ready_i),
       .valid_o           (ibex_prefetch_buffer_valid_o),
@@ -208,84 +210,180 @@ module shufflev_prefetch_buffer import ibex_pkg::*; #(
 
   /* Branch predictor */
 
-  logic         branch_predictor_branch_request;  // request the prefetch buffer to fetch from new address in `branch_predictor_branch_addr`
-  logic [31:0]  branch_predictor_branch_addr;     // a new address to fetch from when branch_predictor_branch_request is asserted
+  logic [NumBranchPredictorEntry-1:0] [31:0] branch_predictor_entry_pc_d, branch_predictor_entry_pc_q;            // the pc value of the branch instruction in each entry
+  logic [NumBranchPredictorEntry-1:0] [1:0]  branch_predictor_entry_state_d, branch_predictor_entry_state_q;      // state of the two-bits branch predictor (0 - Not taken, 1 - Weakly not taken, 2 - Weakly taken, 3 - Taken)
+  logic [NumBranchPredictorEntry-1:0]        branch_predictor_entry_valid_d, branch_predictor_entry_valid_q;      // indicate whether the entry is valid
+  logic [NumBranchPredictorEntryNumBits-1:0] branch_predictor_current_entry_d, branch_predictor_current_entry_q;  // index of the entry to be replace (FIFO replacement policy)
 
-  logic         branch_predictor_predict_taken_d, branch_predictor_predict_taken_q;   // remember the last prediction so that we can generate `branch_predictor_hit`/`branch_predictor_miss` 
-                                                                                      // which is required for flushing the instruction buffer when we prefetch the wrong instruction
-                                                                                      // (a better logic might be needed if we were to predict next branch before the previous one is resolved)
-  logic [31:0]  branch_predictor_revert_pc_d, branch_predictor_revert_pc_q;           // remember the pc to revert to if we mispredict the branch (current pc + 2 or +4)
-
-  logic         branch_predictor_hit;   // indicate whether the last prediction is a hit or miss
-  logic         branch_predictor_miss;
-
+  logic [NumBranchPredictorEntryNumBits-1:0] branch_predictor_update_index;
+  logic                                      branch_predictor_has_entry;
   always_comb begin
-    branch_predictor_branch_request = 1'b0;
-    branch_predictor_branch_addr = 'd0;
-    branch_predictor_predict_taken_d =  branch_predictor_predict_taken_q;
-    branch_predictor_revert_pc_d = branch_predictor_revert_pc_q;
-    branch_predictor_hit = 1'b0;
-    branch_predictor_miss = 1'b0;
+    branch_predictor_entry_pc_d = branch_predictor_entry_pc_q;
+    branch_predictor_entry_state_d = branch_predictor_entry_state_q;
+    branch_predictor_entry_valid_d = branch_predictor_entry_valid_q;
+    branch_predictor_current_entry_d = branch_predictor_current_entry_q;
+    branch_predictor_update_index = branch_predictor_current_entry_q;
+    branch_predictor_has_entry = 1'b0;
 
-    // the ID/EX stage request the PC value to change (branch taken, jump, interrupt, etc)
-    if (branch_i) begin
-      // if `branch_i` asserts as a result of a program instruction, check whether we predict the branch correctly and revert to fetch the correct instruction if need
-      // otherwise we just signal the prefetch buffer to jump to the new PC (power-on reset, interupt after wfi instruction etc.)
-      if (discard_prefetch_buffer_q) begin
-        if (branch_predictor_predict_taken_q) begin
-          branch_predictor_hit = 1'b1;
-          branch_predictor_miss = 1'b0;
-        end else begin
-          branch_predictor_hit = 1'b0;
-          branch_predictor_miss = 1'b1;
-          branch_predictor_branch_request = 1'b1;
-          branch_predictor_branch_addr = addr_i;
+    // branch_i can be asserted after executing branch, jump and any instruction that affect the PC so we need to check `prefetch_predictor_predict_branch_q` before updating entry in the branch predictor
+    if (prefetch_predictor_predict_branch_q && (branch_i || latest_branch_not_taken)) begin
+      // check whether entry for the current branch exist if not we will create new entry at `branch_predictor_current_entry_q` if needed
+      for (int i=0; i<NumBranchPredictorEntry; i++) begin
+        if (branch_predictor_entry_valid_q[i] && (branch_predictor_entry_pc_q[i] == prefetch_predictor_predict_pc_q)) begin
+          branch_predictor_update_index = NumBranchPredictorEntryNumBits'(i);
+          branch_predictor_has_entry = 1'b1;
         end
-      end else begin 
-        branch_predictor_branch_request = 1'b1;
-        branch_predictor_branch_addr = addr_i;
       end
-    end
 
-    // the previous branch instruction was not taken. in this case, check whether we predict the branch correctly and revert to fetch the correct instruction if need
-    if (latest_branch_not_taken) begin
-      if (branch_predictor_predict_taken_q) begin
-        branch_predictor_hit = 1'b0;
-        branch_predictor_miss = 1'b1;
-        branch_predictor_branch_request = 1'b1;
-        branch_predictor_branch_addr = branch_predictor_revert_pc_q;
+      if (!branch_predictor_has_entry) begin
+        if (branch_i) begin
+          branch_predictor_entry_pc_d[branch_predictor_update_index] = prefetch_predictor_predict_pc_q;
+          branch_predictor_entry_state_d[branch_predictor_update_index] = 2'b11;
+          branch_predictor_entry_valid_d[branch_predictor_update_index] = 1'b1;
+          branch_predictor_current_entry_d = branch_predictor_current_entry_q + 'd1;
+          /* verilator lint_off CMPCONST */
+          if (branch_predictor_current_entry_d > NumBranchPredictorEntryNumBits'(NumBranchPredictorEntry-1)) begin   // should be optimized out by the synthesis tool if NumBranchPredictorEntry is a power of two
+            branch_predictor_current_entry_d = 'd0;
+          end
+          /* verilator lint_on CMPCONST */
+        end
       end else begin
-        branch_predictor_hit = 1'b1;
-        branch_predictor_miss = 1'b0;
-      end
-    end
-
-    // if the current instruction being from the prefetch buffer into our shuffling buffer may change the PC value, we predict the next PC value depend on the type of the instruction
-    if (prefetch_buffer_rdata_may_change_pc && ibex_prefetch_buffer_ready_i) begin
-      if (prefetch_buffer_rdata_branch) begin
-        branch_predictor_branch_request = prefetch_buffer_rdata_may_change_pc;
-        branch_predictor_branch_addr = ibex_prefetch_buffer_addr_o + { {19{prefetch_buffer_rdata_uncompress[31]}}, prefetch_buffer_rdata_uncompress[31], prefetch_buffer_rdata_uncompress[7], prefetch_buffer_rdata_uncompress[30:25], prefetch_buffer_rdata_uncompress[11:8], 1'b0 };
-        branch_predictor_predict_taken_d = 1'b1;
-        branch_predictor_revert_pc_d = ibex_prefetch_buffer_addr_o + (prefetch_buffer_rdata_is_compress ? 'd2 : 'd4);
-      end else if (prefetch_buffer_rdata_jal) begin
-        branch_predictor_branch_request = prefetch_buffer_rdata_may_change_pc;
-        branch_predictor_branch_addr = ibex_prefetch_buffer_addr_o + { {11{prefetch_buffer_rdata_uncompress[31]}}, prefetch_buffer_rdata_uncompress[31], prefetch_buffer_rdata_uncompress[19:12], prefetch_buffer_rdata_uncompress[20], prefetch_buffer_rdata_uncompress[30:21], 1'b0 };
-        branch_predictor_predict_taken_d = 1'b1;
-        branch_predictor_revert_pc_d = ibex_prefetch_buffer_addr_o + (prefetch_buffer_rdata_is_compress ? 'd2 : 'd4);
-      end else begin
-        // continue fetch the next instruction
-        // TODO: handle fench etc.
-        branch_predictor_predict_taken_d = 1'b0;
+        if (branch_i) begin
+          if (branch_predictor_entry_state_q[branch_predictor_update_index] == 2'b00) begin
+            branch_predictor_entry_state_d[branch_predictor_update_index] = 2'b01;
+          end else if (branch_predictor_entry_state_q[branch_predictor_update_index] == 2'b01) begin
+            branch_predictor_entry_state_d[branch_predictor_update_index] = 2'b10;
+          end if (branch_predictor_entry_state_q[branch_predictor_update_index] == 2'b10) begin
+            branch_predictor_entry_state_d[branch_predictor_update_index] = 2'b11;
+          end
+        end else if (latest_branch_not_taken) begin
+          if (branch_predictor_entry_state_q[branch_predictor_update_index] == 2'b01) begin
+            branch_predictor_entry_state_d[branch_predictor_update_index] = 2'b00;
+          end else if (branch_predictor_entry_state_q[branch_predictor_update_index] == 2'b10) begin
+            branch_predictor_entry_state_d[branch_predictor_update_index] = 2'b01;
+          end if (branch_predictor_entry_state_q[branch_predictor_update_index] == 2'b11) begin
+            branch_predictor_entry_state_d[branch_predictor_update_index] = 2'b10;
+          end
+        end
       end
     end
   end
 
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
-      branch_predictor_predict_taken_q <= 1'b0;
+      branch_predictor_entry_valid_q <= 'd0;
+      branch_predictor_current_entry_q <= 'd0;
     end else begin
-      branch_predictor_predict_taken_q <= branch_predictor_predict_taken_d;
-      branch_predictor_revert_pc_q <= branch_predictor_revert_pc_d;
+      branch_predictor_entry_pc_q <= branch_predictor_entry_pc_d;
+      branch_predictor_entry_state_q <= branch_predictor_entry_state_d;
+      branch_predictor_entry_valid_q <= branch_predictor_entry_valid_d;
+      branch_predictor_current_entry_q <= branch_predictor_current_entry_d;
+    end
+  end
+
+  logic [1:0] current_inst_predictor_state;
+  always_comb begin
+    current_inst_predictor_state = 'd0;
+    for (int i=0; i<NumBranchPredictorEntry; i++) begin
+      if (branch_predictor_entry_valid_q[i] && (branch_predictor_entry_pc_q[i] == ibex_prefetch_buffer_addr_o)) begin
+        current_inst_predictor_state = branch_predictor_entry_state_q[i];
+      end
+    end
+  end
+
+  /* Prefetch predictor */
+
+  logic         prefetch_predictor_branch_request;  // request the prefetch buffer to fetch from new address in `prefetch_predictor_branch_addr`
+  logic [31:0]  prefetch_predictor_branch_addr;     // a new address to fetch from when `prefetch_predictor_branch_request` is asserted
+
+  logic         prefetch_predictor_predict_taken_d, prefetch_predictor_predict_taken_q;   // save the most recent prediction so that we can generate `prefetch_predictor_hit`/`prefetch_predictor_miss` 
+                                                                                          // which is required for flushing the instruction buffer when we prefetch the wrong instruction
+                                                                                          // (a better logic might be needed if we were to predict next branch before the previous one is resolved)
+  logic [31:0]  prefetch_predictor_revert_pc_d, prefetch_predictor_revert_pc_q;           // save the next pc value to revert to if we mispredict the branch (current pc + 2 or +4)
+  logic [31:0]  prefetch_predictor_predict_pc_d, prefetch_predictor_predict_pc_q;         // save the pc value that initiate the prefetch (need by the branch predictor to update its state)
+  logic         prefetch_predictor_predict_branch_d, prefetch_predictor_predict_branch_q; // indicate whether the prefetch was caused by a branch instruction (need to trigger the branch predictor to update its state)
+
+  logic         prefetch_predictor_hit;   // indicate whether the last prediction is a hit or miss
+  logic         prefetch_predictor_miss;
+
+  always_comb begin
+    prefetch_predictor_branch_request = 1'b0;
+    prefetch_predictor_branch_addr = 'd0;
+    prefetch_predictor_predict_taken_d =  prefetch_predictor_predict_taken_q;
+    prefetch_predictor_revert_pc_d = prefetch_predictor_revert_pc_q;
+    prefetch_predictor_predict_pc_d = prefetch_predictor_predict_pc_q;
+    prefetch_predictor_predict_branch_d = prefetch_predictor_predict_branch_q;
+    prefetch_predictor_hit = 1'b0;
+    prefetch_predictor_miss = 1'b0;
+
+    // the ID/EX stage request the PC value to change (branch taken, jump, interrupt, etc)
+    if (branch_i) begin
+      // if `branch_i` asserts as a result of a program instruction, check whether we predict the branch correctly and revert to fetch the correct instruction if need
+      // otherwise we just signal the prefetch buffer to jump to the new PC (power-on reset, interupt after wfi instruction etc.)
+      if (discard_prefetch_buffer_q) begin
+        if (prefetch_predictor_predict_taken_q) begin
+          prefetch_predictor_hit = 1'b1;
+          prefetch_predictor_miss = 1'b0;
+        end else begin
+          prefetch_predictor_hit = 1'b0;
+          prefetch_predictor_miss = 1'b1;
+          prefetch_predictor_branch_request = 1'b1;
+          prefetch_predictor_branch_addr = addr_i;
+        end
+      end else begin 
+        prefetch_predictor_branch_request = 1'b1;
+        prefetch_predictor_branch_addr = addr_i;
+      end
+    end
+
+    // the previous branch instruction was not taken. in this case, check whether we predict the branch correctly and revert to fetch the correct instruction if need
+    if (latest_branch_not_taken) begin
+      if (prefetch_predictor_predict_taken_q) begin
+        prefetch_predictor_hit = 1'b0;
+        prefetch_predictor_miss = 1'b1;
+        prefetch_predictor_branch_request = 1'b1;
+        prefetch_predictor_branch_addr = prefetch_predictor_revert_pc_q;
+      end else begin
+        prefetch_predictor_hit = 1'b1;
+        prefetch_predictor_miss = 1'b0;
+      end
+    end
+
+    // if the current instruction being from the prefetch buffer into our shuffling buffer may change the PC value, we predict the next PC value depend on the type of the instruction
+    if (prefetch_buffer_rdata_may_change_pc && ibex_prefetch_buffer_ready_i) begin
+      if (prefetch_buffer_rdata_branch) begin
+        if (current_inst_predictor_state == 2'b10 || current_inst_predictor_state == 2'b11) begin
+          prefetch_predictor_branch_request = prefetch_buffer_rdata_may_change_pc;
+          prefetch_predictor_branch_addr = ibex_prefetch_buffer_addr_o + { {19{prefetch_buffer_rdata_uncompress[31]}}, prefetch_buffer_rdata_uncompress[31], prefetch_buffer_rdata_uncompress[7], prefetch_buffer_rdata_uncompress[30:25], prefetch_buffer_rdata_uncompress[11:8], 1'b0 };
+          prefetch_predictor_predict_taken_d = 1'b1;
+          prefetch_predictor_revert_pc_d = ibex_prefetch_buffer_addr_o + (prefetch_buffer_rdata_is_compress ? 'd2 : 'd4);
+        end else begin
+          prefetch_predictor_predict_taken_d = 1'b0;
+        end
+        prefetch_predictor_predict_pc_d = ibex_prefetch_buffer_addr_o;
+        prefetch_predictor_predict_branch_d = 1'b1;
+      end else if (prefetch_buffer_rdata_jal) begin
+        prefetch_predictor_branch_request = prefetch_buffer_rdata_may_change_pc;
+        prefetch_predictor_branch_addr = ibex_prefetch_buffer_addr_o + { {11{prefetch_buffer_rdata_uncompress[31]}}, prefetch_buffer_rdata_uncompress[31], prefetch_buffer_rdata_uncompress[19:12], prefetch_buffer_rdata_uncompress[20], prefetch_buffer_rdata_uncompress[30:21], 1'b0 };
+        prefetch_predictor_predict_taken_d = 1'b1;
+        prefetch_predictor_predict_branch_d = 1'b0;
+      end else begin
+        // continue fetch the next instruction
+        // TODO: handle fench etc.
+        prefetch_predictor_predict_taken_d = 1'b0;
+        prefetch_predictor_predict_branch_d = 1'b0;
+      end
+    end
+  end
+
+  always_ff @(posedge clk_i or negedge rst_ni) begin
+    if (!rst_ni) begin
+      prefetch_predictor_predict_taken_q <= 1'b0;
+    end else begin
+      prefetch_predictor_predict_taken_q <= prefetch_predictor_predict_taken_d;
+      prefetch_predictor_revert_pc_q <= prefetch_predictor_revert_pc_d;
+      prefetch_predictor_predict_pc_q <= prefetch_predictor_predict_pc_d;
+      prefetch_predictor_predict_branch_q <= prefetch_predictor_predict_branch_d;
     end
   end
 
@@ -311,7 +409,7 @@ module shufflev_prefetch_buffer import ibex_pkg::*; #(
   // - we still accept new instruction when the instruction buffer is full if one entry is being removed (ready_i and valid_o are both asserted)
   // - we don't accept new branch/jump instruction when the previous one hasn't been resolved
   logic prefetch_buffer_to_inst_buffer;
-  assign prefetch_buffer_to_inst_buffer = !branch_predictor_miss && ibex_prefetch_buffer_valid_o && (!inst_buffer_full || (ready_i && valid_o)) && !(discard_prefetch_buffer_q && prefetch_buffer_rdata_may_change_pc);
+  assign prefetch_buffer_to_inst_buffer = !prefetch_predictor_miss && ibex_prefetch_buffer_valid_o && (!inst_buffer_full || (ready_i && valid_o)) && !(discard_prefetch_buffer_q && prefetch_buffer_rdata_may_change_pc);
 
   logic inst_buffer_to_id_ex;
   assign inst_buffer_to_id_ex = ready_i && valid_o;
@@ -351,14 +449,14 @@ module shufflev_prefetch_buffer import ibex_pkg::*; #(
     end
 
     // when we correctly predict the branch, deassert `inst_buffer_is_prefetch_` to make all prefetch instruction become ready
-    if (branch_predictor_hit) begin
+    if (prefetch_predictor_hit) begin
       for (int i=0; i<ShuffleBuffSize; i++) begin
         inst_buffer_is_prefetch_d[i] = 1'b0;
       end
     end
 
     // when we mispredict the branch, make all prefetch instructions invalid
-    if (branch_predictor_miss) begin
+    if (prefetch_predictor_miss) begin
       for (int i=0; i<ShuffleBuffSize; i++) begin
         if (inst_buffer_is_prefetch_q[i]) begin
           inst_buffer_valid_d[i] = 1'b0;
@@ -481,7 +579,7 @@ module shufflev_prefetch_buffer import ibex_pkg::*; #(
     end
 
     // revert physical register assignment when the branch we mispredict
-    if (branch_predictor_miss) begin
+    if (prefetch_predictor_miss) begin
       logical_to_physical_reg_d = logical_to_physical_reg_checkpoint_q;
       physical_reg_reserved_d = physical_reg_reserved_checkpoint_q;
     end 
@@ -540,7 +638,7 @@ module shufflev_prefetch_buffer import ibex_pkg::*; #(
       // do not depend on ourself (checking the valid bit in the for-loop is not enough as old instruction can be removed and new instruction can be added in the same cycle)
       inst_buffer_dependency_d[inst_buffer_insert_index][inst_buffer_insert_index] = 1'b0;
 
-      inst_buffer_may_change_pc_d[inst_buffer_insert_index] = prefetch_buffer_rdata_branch_or_jump;
+      inst_buffer_may_change_pc_d[inst_buffer_insert_index] = prefetch_buffer_rdata_may_change_pc;
       inst_buffer_is_load_store_d[inst_buffer_insert_index] = prefetch_buffer_rdata_load_or_store;
       inst_buffer_is_env_csr_d[inst_buffer_insert_index] = prefetch_buffer_rdata_synch_env_csr;
     
@@ -716,7 +814,7 @@ module shufflev_prefetch_buffer import ibex_pkg::*; #(
         inst_buffer_fetch_id_d[i] = inst_buffer_fetch_id_q[i];
       end
 
-      if (branch_predictor_miss) begin
+      if (prefetch_predictor_miss) begin
         fetch_id_d = fetch_id_checkpoint_q;
       end 
 
