@@ -327,7 +327,7 @@ module ibex_if_stage import ibex_pkg::*; #(
       .ShuffleBuffSize   (ShuffleBuffSize),
       .NumPhysicalRegs   (NumPhysicalRegs),
       .RngType           (RngType),
-      .RngSeed           (RngSeed),
+      .RngSeed           (RngSeed)
     ) prefetch_buffer_i (
         .clk_i               ( clk_i                      ),
         .rst_ni              ( rst_ni                     ),

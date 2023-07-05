@@ -31,7 +31,7 @@ module top_pynqz2 import ibex_pkg::*; (
     .GpiWidth(5),
     .GpoWidth(8),
     .PwmWidth(6),
-    .SRAMInitFile(SRAMInitFile)
+    .SRAMInitFile(SRAMInitFile),
     .ShuffleBuffSize(ShuffleBuffSize),
     .NumPhysicalRegs(NumPhysicalRegs),
     .RngType(RngType),
