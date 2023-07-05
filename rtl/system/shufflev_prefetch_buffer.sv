@@ -409,7 +409,7 @@ module shufflev_prefetch_buffer import ibex_pkg::*; #(
   // - we still accept new instruction when the instruction buffer is full if one entry is being removed (ready_i and valid_o are both asserted)
   // - we don't accept new branch/jump instruction when the previous one hasn't been resolved
   logic prefetch_buffer_to_inst_buffer;
-  assign prefetch_buffer_to_inst_buffer = !prefetch_predictor_miss && ibex_prefetch_buffer_valid_o && (!inst_buffer_full || (ready_i && valid_o)) && !(discard_prefetch_buffer_q && prefetch_buffer_rdata_may_change_pc);
+  assign prefetch_buffer_to_inst_buffer = !prefetch_predictor_miss && ibex_prefetch_buffer_valid_o && (!inst_buffer_full || (ready_i && valid_o)) && !(discard_prefetch_buffer_q && prefetch_buffer_rdata_may_change_pc && !prefetch_predictor_hit);
 
   logic inst_buffer_to_id_ex;
   assign inst_buffer_to_id_ex = ready_i && valid_o;
