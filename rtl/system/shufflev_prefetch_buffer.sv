@@ -5,7 +5,8 @@ module shufflev_prefetch_buffer import ibex_pkg::*; #(
   parameter int unsigned    NumPhysicalRegs   = 64,
   parameter shufflev_rng_e  RngType           = RandomTkacik,
   parameter int unsigned    RngSeed           = 123456,
-  parameter bit             EnableFetchId     = 1'b0
+  parameter bit             EnableFetchId     = 1'b0,
+  parameter bit             EnableFastBranch  = 1'b1
 ) (
   input  logic        clk_i,
   input  logic        rst_ni,   // asynchronous reset
@@ -309,6 +310,7 @@ module shufflev_prefetch_buffer import ibex_pkg::*; #(
   logic [ShuffleBuffSize-1:0] [NumPhysicalRegsNumBits-1:0] inst_buffer_rs2_physical_d, inst_buffer_rs2_physical_q;   // physical RS2 index (binary format)
   logic [ShuffleBuffSize-1:0] [NumPhysicalRegs-1:0]         inst_buffer_physical_reg_usage_d, inst_buffer_physical_reg_usage_q; // indicate which physical register is begin used by this instruction (bit vector format)
   logic [ShuffleBuffSize-1:0] [ShuffleBuffSize-1:0]                     inst_buffer_dependency_d, inst_buffer_dependency_q;       // indicate which instruction does this instruction depends on
+  logic [ShuffleBuffSize-1:0]                                 inst_buffer_may_change_pc_d, inst_buffer_may_change_pc_q; // indicate whether this instruction may change PC value (branch, jump, etc.)
   logic [ShuffleBuffSize-1:0]                                 inst_buffer_is_load_store_d, inst_buffer_is_load_store_q; // indicate whether this instruction is a load/store
   logic [ShuffleBuffSize-1:0]                                 inst_buffer_is_env_csr_d, inst_buffer_is_env_csr_q;       // indicate whether this instruction is an environment/csr instruction (ecall/ebreak/csr.../wfi)
 
@@ -343,6 +345,7 @@ module shufflev_prefetch_buffer import ibex_pkg::*; #(
       inst_buffer_rs2_physical_d[i] = inst_buffer_rs2_physical_q[i];
       inst_buffer_physical_reg_usage_d[i] = inst_buffer_physical_reg_usage_q[i];
       inst_buffer_dependency_d[i] = inst_buffer_dependency_q[i];
+      inst_buffer_may_change_pc_d[i] = inst_buffer_may_change_pc_q[i];
       inst_buffer_is_load_store_d[i] = inst_buffer_is_load_store_q[i];
       inst_buffer_is_env_csr_d[i] = inst_buffer_is_env_csr_q[i];
     end
@@ -411,6 +414,7 @@ module shufflev_prefetch_buffer import ibex_pkg::*; #(
       // do not depend on ourself (checking the valid bit in the for-loop is not enough as old instruction can be removed and new instruction can be added in the same cycle)
       inst_buffer_dependency_d[inst_buffer_insert_index][inst_buffer_insert_index] = 1'b0;
 
+      inst_buffer_may_change_pc_d[inst_buffer_insert_index] = prefetch_buffer_rdata_branch_or_jump;
       inst_buffer_is_load_store_d[inst_buffer_insert_index] = prefetch_buffer_rdata_load_or_store;
       inst_buffer_is_env_csr_d[inst_buffer_insert_index] = prefetch_buffer_rdata_synch_env_csr;
     end
@@ -435,6 +439,7 @@ module shufflev_prefetch_buffer import ibex_pkg::*; #(
         inst_buffer_rs2_physical_q[i] <= inst_buffer_rs2_physical_d[i];
         inst_buffer_physical_reg_usage_q[i] <= inst_buffer_physical_reg_usage_d[i];
         inst_buffer_dependency_q[i] <= inst_buffer_dependency_d[i];
+        inst_buffer_may_change_pc_q[i] <= inst_buffer_may_change_pc_d[i];
         inst_buffer_is_load_store_q[i] <= inst_buffer_is_load_store_d[i];
         inst_buffer_is_env_csr_q[i] <= inst_buffer_is_env_csr_d[i];
       end
@@ -509,8 +514,35 @@ module shufflev_prefetch_buffer import ibex_pkg::*; #(
         random_first_valid_entry_index = ShuffleBuffSizeNumBits'(i);
       end
     end
+  end
 
-    inst_buffer_remove_index = distance_table[random_first_valid_entry_index][random_number];
+  if (EnableFastBranch) begin
+    logic [ShuffleBuffSize-1:0] inst_buffer_has_dependency;
+    always_comb begin
+      for (int i=0; i<ShuffleBuffSize; i++) begin
+        inst_buffer_has_dependency[i] = |inst_buffer_dependency_q[i];
+      end
+    end
+
+    logic [ShuffleBuffSize-1:0] inst_buffer_ready_branch;
+    assign inst_buffer_ready_branch = inst_buffer_valid_q & ~inst_buffer_has_dependency & inst_buffer_may_change_pc_q;
+
+    logic inst_buffer_has_ready_branch;
+    assign inst_buffer_has_ready_branch = |inst_buffer_ready_branch;
+
+    logic [ShuffleBuffSizeNumBits-1:0] inst_buffer_ready_branch_index;
+    always_comb begin
+      inst_buffer_ready_branch_index = 'd0;
+      for (int i=ShuffleBuffSize-1; i>=0; i--) begin
+        if (inst_buffer_ready_branch[i]) begin
+          inst_buffer_ready_branch_index = ShuffleBuffSizeNumBits'(i);
+        end
+      end
+    end
+
+    assign inst_buffer_remove_index = inst_buffer_has_ready_branch ? inst_buffer_ready_branch_index : distance_table[random_first_valid_entry_index][random_number];
+  end else begin
+    assign inst_buffer_remove_index = distance_table[random_first_valid_entry_index][random_number];
   end
 
   logic [ShuffleBuffSizeNumBits-1:0]   inst_buffer_insert_index;      // index of the instruction buffer to insert new instruction into which will be identical to `inst_buffer_remove_index`
