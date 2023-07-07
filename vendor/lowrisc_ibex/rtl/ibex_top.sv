@@ -145,7 +145,7 @@ module ibex_top import ibex_pkg::*; #(
 
   localparam bit          Lockstep          = SecureIbex;
   localparam bit          ResetAll          = Lockstep;
-  localparam bit          DummyInstructions = SecureIbex;
+  localparam bit          DummyInstructions = 1'b1;
   localparam bit          RegFileECC        = SecureIbex;
   localparam bit          RegFileWrenCheck  = SecureIbex;
   localparam int unsigned RegFileDataWidth  = RegFileECC ? 32 + 7 : 32;
