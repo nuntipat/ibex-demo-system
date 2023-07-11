@@ -8,9 +8,11 @@ module shufflev_prefetch_buffer import ibex_pkg::*; #(
   parameter bit             EnableFetchId     = 1'b0,
   parameter bit             EnableFastBranch  = 1'b1,
   parameter bit             EnablePrefetch    = 1'b1,
-  parameter bit             EnableBranchPredictor = 1'b0,
-  parameter bit             EnableOptimizeJal = 1'b0,
-  parameter int unsigned    NumBranchPredictorEntry = 16
+  parameter bit             EnableBranchPredictor = 1'b1,
+  parameter shufflev_branch_predictor_e BranchPredictorAlgorithm = BranchOffset,
+  parameter bit             EnableOptimizeJal = 1'b1,
+  parameter int unsigned    NumBranchPredictorEntry = 16,
+  parameter bit             DisplayBranchPredictionStat = 1'b0
 ) (
   input  logic        clk_i,
   input  logic        rst_ni,   // asynchronous reset
@@ -213,9 +215,18 @@ module shufflev_prefetch_buffer import ibex_pkg::*; #(
 
   /* Branch predictor */
   
-  logic [1:0] current_inst_predictor_state;
+  logic [31:0] prefetch_buffer_rdata_branch_offset;
+  assign prefetch_buffer_rdata_branch_offset =  { {19{prefetch_buffer_rdata_uncompress[31]}}, prefetch_buffer_rdata_uncompress[31], prefetch_buffer_rdata_uncompress[7], prefetch_buffer_rdata_uncompress[30:25], prefetch_buffer_rdata_uncompress[11:8], 1'b0 };
 
-  if (EnableBranchPredictor) begin
+  logic branch_predictor_predict_taken;
+
+  if (EnableBranchPredictor && BranchPredictorAlgorithm == AlwaysTaken) begin
+    assign branch_predictor_predict_taken = 1'b1;
+  end else if (EnableBranchPredictor && BranchPredictorAlgorithm == AlwaysNotTaken) begin
+    assign branch_predictor_predict_taken = 1'b0;
+  end else if (EnableBranchPredictor && BranchPredictorAlgorithm == BranchOffset) begin
+    assign branch_predictor_predict_taken = prefetch_buffer_rdata_branch_offset[31];  // always predict branch with negative offset as taken and positive offset as not taken
+  end else if (EnableBranchPredictor && BranchPredictorAlgorithm == TwoBits) begin
     logic [NumBranchPredictorEntry-1:0] [31:0] branch_predictor_entry_pc_d, branch_predictor_entry_pc_q;            // the pc value of the branch instruction in each entry
     logic [NumBranchPredictorEntry-1:0] [1:0]  branch_predictor_entry_state_d, branch_predictor_entry_state_q;      // state of the two-bits branch predictor (0 - Not taken, 1 - Weakly not taken, 2 - Weakly taken, 3 - Taken)
     logic [NumBranchPredictorEntry-1:0]        branch_predictor_entry_valid_d, branch_predictor_entry_valid_q;      // indicate whether the entry is valid
@@ -287,6 +298,8 @@ module shufflev_prefetch_buffer import ibex_pkg::*; #(
       end
     end
 
+    logic [1:0] current_inst_predictor_state;
+
     always_comb begin
       current_inst_predictor_state = 'd0;
       for (int i=0; i<NumBranchPredictorEntry; i++) begin
@@ -295,11 +308,16 @@ module shufflev_prefetch_buffer import ibex_pkg::*; #(
         end
       end
     end
-  end else begin
-    assign current_inst_predictor_state = 'd0;
 
-    logic [1:0] unused_current_inst_predictor_state;
-    assign unused_current_inst_predictor_state = current_inst_predictor_state;
+    assign branch_predictor_predict_taken = current_inst_predictor_state == 2'b10 || current_inst_predictor_state == 2'b11;
+  end else begin
+    assign branch_predictor_predict_taken = 1'b0;
+
+    logic unused_branch_predictor_predict_taken;
+    assign unused_branch_predictor_predict_taken = branch_predictor_predict_taken;
+
+    logic [31:0] unused_prefetch_buffer_rdata_branch_offset;
+    assign unused_prefetch_buffer_rdata_branch_offset = prefetch_buffer_rdata_branch_offset;
   end
 
   /* Prefetch predictor */
@@ -364,9 +382,9 @@ module shufflev_prefetch_buffer import ibex_pkg::*; #(
       // if the current instruction being from the prefetch buffer into our shuffling buffer may change the PC value, we predict the next PC value depend on the type of the instruction
       if (prefetch_buffer_rdata_may_change_pc && ibex_prefetch_buffer_ready_i) begin
         if (EnableBranchPredictor && prefetch_buffer_rdata_branch) begin
-          if (current_inst_predictor_state == 2'b10 || current_inst_predictor_state == 2'b11) begin
+          if (branch_predictor_predict_taken) begin
             prefetch_predictor_branch_request = prefetch_buffer_rdata_may_change_pc;
-            prefetch_predictor_branch_addr = ibex_prefetch_buffer_addr_o + { {19{prefetch_buffer_rdata_uncompress[31]}}, prefetch_buffer_rdata_uncompress[31], prefetch_buffer_rdata_uncompress[7], prefetch_buffer_rdata_uncompress[30:25], prefetch_buffer_rdata_uncompress[11:8], 1'b0 };
+            prefetch_predictor_branch_addr = ibex_prefetch_buffer_addr_o + prefetch_buffer_rdata_branch_offset;
             prefetch_predictor_predict_taken_d = 1'b1;
             prefetch_predictor_revert_pc_d = ibex_prefetch_buffer_addr_o + (prefetch_buffer_rdata_is_compress ? 'd2 : 'd4);
           end else begin
@@ -889,6 +907,22 @@ module shufflev_prefetch_buffer import ibex_pkg::*; #(
     assign fetch_id_idex = inst_buffer_fetch_id_q[inst_buffer_remove_index];
   end else begin
     assign fetch_id_idex = 'd0;
+  end
+
+  if (DisplayBranchPredictionStat) begin
+    int hit = 0;
+    int miss = 0;
+    always_ff @(posedge clk_i or negedge rst_ni) begin
+      if (prefetch_predictor_predict_branch_q) begin
+        if (prefetch_predictor_hit) begin
+          hit <= hit + 1;
+        end
+        if (prefetch_predictor_miss) begin
+          miss <= miss + 1;
+        end
+      end
+      $display("Branch prediction accuracy = %f (hit = %d, miss = %d)", hit / real'(hit + miss), hit, miss);
+    end
   end
 
 endmodule

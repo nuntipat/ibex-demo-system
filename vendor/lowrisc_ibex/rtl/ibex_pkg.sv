@@ -669,4 +669,11 @@ package ibex_pkg;
     RandomTkacik = 1
   } shufflev_rng_e;
 
+  typedef enum integer {
+    AlwaysTaken    = 0,
+    AlwaysNotTaken = 1,
+    BranchOffset   = 2,
+    TwoBits        = 3
+  } shufflev_branch_predictor_e;
+
 endpackage
