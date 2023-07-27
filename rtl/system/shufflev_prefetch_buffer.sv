@@ -26,6 +26,7 @@ module shufflev_prefetch_buffer import ibex_pkg::*; #(
   input  logic [31:0] addr_i,
 
   input  logic        ready_i /*verilator public_flat_rw*/, 
+  input  logic        id_in_ready_i,
   output logic        valid_o /*verilator public_flat_rw*/, 
   output logic        is_compress_o,
   output logic [31:0] rdata_o /*verilator public_flat_rw*/,
@@ -199,7 +200,7 @@ module shufflev_prefetch_buffer import ibex_pkg::*; #(
   logic         latest_branch_pc_just_executed_d, latest_branch_pc_just_executed_q; // assert to indicate that the last instruction recieved by the ID/EX stage matches `latest_branch_pc_q`
   
   logic         latest_branch_not_taken;  // assert to indicate that the last branch instruction executed by the ID/EX stage doesn't caused the PC to change (use for deassert `discard_prefetch_buffer_q`)
-  assign latest_branch_not_taken = latest_branch_pc_just_executed_q && ready_i;     // ID/EX stage deasserts ready_i when the last received instruction is going to change PC e.g. taken branch, jump, etc.
+  assign latest_branch_not_taken = latest_branch_pc_just_executed_q && id_in_ready_i;     // ID/EX stage deasserts ready_i when the last received instruction is going to change PC e.g. taken branch, jump, etc.
 
   always_comb begin
     discard_prefetch_buffer_d = discard_prefetch_buffer_q;
