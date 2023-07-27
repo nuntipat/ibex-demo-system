@@ -38,6 +38,7 @@ NOTE:   String length must be evenly divisible by 16byte (str_len % 16 == 0)
 #include <stdint.h>
 #include <string.h> // CBC mode, for memset
 #include "aes.h"
+#include "hal.h"
 
 
 /*****************************************************************************/
@@ -453,7 +454,13 @@ static void Cipher(void)
   // These Nr-1 rounds are executed in the loop below.
   for(round = 1; round < Nr; ++round)
   {
-    SubBytes();
+    if (round == 1) {
+      trigger_high();
+    }
+      SubBytes();
+    if (round == 1) {
+      trigger_low();
+    }
     ShiftRows();
     MixColumns();
     AddRoundKey(round);

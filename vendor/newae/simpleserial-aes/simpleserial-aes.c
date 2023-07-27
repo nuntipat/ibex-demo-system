@@ -38,14 +38,14 @@ uint8_t get_pt(uint8_t* pt, uint8_t len)
 {
     aes_indep_enc_pretrigger(pt);
 
-	trigger_high();
+	// trigger_high();
 
   #ifdef ADD_JITTER
   for (volatile uint8_t k = 0; k < (*pt & 0x0F); k++);
   #endif
 
 	aes_indep_enc(pt); /* encrypting the data block */
-	trigger_low();
+	// trigger_low();
 
     aes_indep_enc_posttrigger(pt);
 
