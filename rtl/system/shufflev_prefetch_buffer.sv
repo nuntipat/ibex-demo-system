@@ -12,7 +12,8 @@ module shufflev_prefetch_buffer import ibex_pkg::*; #(
   parameter shufflev_branch_predictor_e BranchPredictorAlgorithm = BranchOffset,
   parameter bit             EnableOptimizeJal = 1'b1,
   parameter int unsigned    NumBranchPredictorEntry = 16,
-  parameter bit             DisplayBranchPredictionStat = 1'b0
+  parameter bit             DisplayBranchPredictionStat = 1'b0,
+  parameter bit             DisplayRNGStat = 1'b0
 ) (
   input  logic        clk_i,
   input  logic        rst_ni,   // asynchronous reset
@@ -922,6 +923,30 @@ module shufflev_prefetch_buffer import ibex_pkg::*; #(
         end
       end
       $display("Branch prediction accuracy = %f (hit = %d, miss = %d)", hit / real'(hit + miss), hit, miss);
+    end
+  end
+
+  if (DisplayRNGStat) begin
+    int unsigned rng_stat_cycle_count;
+    int unsigned random_number_distribution [0:ShuffleBuffSize-1];
+
+    always_ff @(posedge clk_i or negedge rst_ni) begin
+      if (!rst_ni) begin
+        rng_stat_cycle_count <= 'd0;
+        for (int i=0; i<ShuffleBuffSize; i++) begin
+          random_number_distribution[i] <= 'd0;
+        end
+      end else if (random_number_valid) begin
+        rng_stat_cycle_count <= rng_stat_cycle_count + 'd1;
+        random_number_distribution[random_number] <= random_number_distribution[random_number] + 'd1;
+      end
+
+      if (rng_stat_cycle_count % 10000 == 'd0) begin
+        $display("Summary @%dcycles", rng_stat_cycle_count);
+        for (int i=0; i<ShuffleBuffSize; i++) begin
+          $display("%d: ", random_number_distribution[i]);
+        end
+      end
     end
   end
 
