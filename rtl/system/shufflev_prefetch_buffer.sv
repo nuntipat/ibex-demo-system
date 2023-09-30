@@ -12,6 +12,7 @@ module shufflev_prefetch_buffer import ibex_pkg::*; #(
   parameter shufflev_branch_predictor_e BranchPredictorAlgorithm = BranchOffset,
   parameter bit             EnableOptimizeJal = 1'b1,
   parameter bit             EnableOptimizeMem = 1'b1,
+  parameter bit             EnableCheckpoint = 1'b1,
   parameter int unsigned    NumBranchPredictorEntry = 16,
   parameter bit             DisplayBranchPredictionStat = 1'b0,
   parameter bit             DisplayRNGStat = 1'b0
@@ -485,6 +486,12 @@ module shufflev_prefetch_buffer import ibex_pkg::*; #(
   logic [ShuffleBuffSize-1:0]           inst_buffer_valid_d, inst_buffer_valid_q;             // indicate whether the entry in the buffer is valid or not
   logic [ShuffleBuffSize-1:0]           inst_buffer_is_prefetch_d, inst_buffer_is_prefetch_q; // indicate whether the entry in the buffer is a prefetch instruction which should not be sent to the ID/EX stage 
 
+  logic [ShuffleBuffSize-1:0] [31:0]    inst_buffer_addr_checkpoint_d, inst_buffer_addr_checkpoint_q;               // checkpoint registers (required for full checkpoint)
+  logic [ShuffleBuffSize-1:0] [31:0]    inst_buffer_data_checkpoint_d, inst_buffer_data_checkpoint_q;
+  logic [ShuffleBuffSize-1:0]           inst_buffer_is_compress_checkpoint_d, inst_buffer_is_compress_checkpoint_q;
+  logic [ShuffleBuffSize-1:0]           inst_buffer_valid_checkpoint_d, inst_buffer_valid_checkpoint_q;
+  logic [ShuffleBuffSize-1:0]           inst_buffer_is_prefetch_checkpoint_d, inst_buffer_is_prefetch_checkpoint_q;
+
   logic                       inst_buffer_full;             // indicate that all entry in the inst buffer is valid but some/all entries may not be ready as they are prefetch instructions
   logic [ShuffleBuffSize-1:0] inst_buffer_is_ready;         // indicate which entry is valid and is not a prefetch instruction (ready)
   logic                       inst_buffer_all_inst_ready;   // indicate that all entry in the inst buffer is ready
@@ -494,13 +501,23 @@ module shufflev_prefetch_buffer import ibex_pkg::*; #(
   assign inst_buffer_all_inst_ready   =   &inst_buffer_is_ready;   
   assign inst_buffer_any_inst_ready   =   |inst_buffer_is_ready;
 
+  logic inst_buffer_has_dependent_load_store;
+  always_comb begin
+    inst_buffer_has_dependent_load_store = 1'b0;
+    for (int i=0; i<ShuffleBuffSize; i++) begin
+      if (inst_buffer_is_load_q[i] && |inst_buffer_mem_dependency_q[i]) begin
+        inst_buffer_has_dependent_load_store = 1'b1;
+      end
+    end
+  end
+
   // retrieve new instruction from the prefetch buffer when the prefetch buffer has valid data, the instruction buffer is not full and `discard_prefetch_buffer_q` is not asserted
   // Note:
   // - we still accept new instruction when the instruction buffer is full if one entry is being removed (ready_i and valid_o are both asserted)
   // - we don't accept new branch/jump instruction when the previous one hasn't been resolved
   logic prefetch_buffer_to_inst_buffer;
   if (EnablePrefetch) begin
-    assign prefetch_buffer_to_inst_buffer = !prefetch_predictor_miss && ibex_prefetch_buffer_valid_o && (!inst_buffer_full || (ready_i && valid_o)) && !(discard_prefetch_buffer_q && prefetch_buffer_rdata_may_change_pc && !prefetch_predictor_hit);
+    assign prefetch_buffer_to_inst_buffer = !prefetch_predictor_miss && ibex_prefetch_buffer_valid_o && (!inst_buffer_full || (ready_i && valid_o)) && !(discard_prefetch_buffer_q && prefetch_buffer_rdata_may_change_pc && !prefetch_predictor_hit) && !(EnableCheckpoint && discard_prefetch_buffer_q && inst_buffer_has_dependent_load_store && prefetch_buffer_rdata_branch);
   end else begin
     assign prefetch_buffer_to_inst_buffer = !branch_i && ibex_prefetch_buffer_valid_o && (!inst_buffer_full || (ready_i && valid_o)) && (!discard_prefetch_buffer_q || latest_branch_not_taken);
   end
@@ -515,6 +532,14 @@ module shufflev_prefetch_buffer import ibex_pkg::*; #(
       inst_buffer_is_compress_d[i] = inst_buffer_is_compress_q[i];
       inst_buffer_valid_d[i] = inst_buffer_valid_q[i];
       inst_buffer_is_prefetch_d[i] = inst_buffer_is_prefetch_q[i];
+      
+      if (EnableCheckpoint) begin
+        inst_buffer_addr_checkpoint_d[i] = inst_buffer_addr_checkpoint_q[i];
+        inst_buffer_data_checkpoint_d[i] = inst_buffer_data_checkpoint_q[i];
+        inst_buffer_is_compress_checkpoint_d[i] = inst_buffer_is_compress_checkpoint_q[i];
+        inst_buffer_valid_checkpoint_d[i] = inst_buffer_valid_checkpoint_q[i];
+        inst_buffer_is_prefetch_checkpoint_d[i] = inst_buffer_is_prefetch_checkpoint_q[i];
+      end
     end
 
     ibex_prefetch_buffer_ready_i = 1'b0;
@@ -540,6 +565,15 @@ module shufflev_prefetch_buffer import ibex_pkg::*; #(
       inst_buffer_is_compress_d[inst_buffer_insert_index] = prefetch_buffer_rdata_is_compress;
       inst_buffer_valid_d[inst_buffer_insert_index] = 1'b1;
       inst_buffer_is_prefetch_d[inst_buffer_insert_index] = EnablePrefetch ? discard_prefetch_buffer_q : 1'b0;
+
+      if (EnableCheckpoint && prefetch_buffer_rdata_branch) begin
+        inst_buffer_addr_checkpoint_d = inst_buffer_addr_q;
+        inst_buffer_data_checkpoint_d = inst_buffer_data_q;
+        inst_buffer_is_compress_checkpoint_d = inst_buffer_is_compress_q;
+        inst_buffer_valid_checkpoint_d = inst_buffer_valid_q;
+        inst_buffer_is_prefetch_checkpoint_d = inst_buffer_is_prefetch_q;
+        // TODO: has create checkpoint
+      end
     end
 
     // when we correctly predict the branch, deassert `inst_buffer_is_prefetch_` to make all prefetch instruction become ready
@@ -551,11 +585,19 @@ module shufflev_prefetch_buffer import ibex_pkg::*; #(
 
     // when we mispredict the branch, make all prefetch instructions invalid
     if (prefetch_predictor_miss) begin
-      for (int i=0; i<ShuffleBuffSize; i++) begin
-        if (inst_buffer_is_prefetch_q[i]) begin
-          inst_buffer_valid_d[i] = 1'b0;
+      if (EnableCheckpoint) begin
+        inst_buffer_addr_d = inst_buffer_addr_checkpoint_q;
+        inst_buffer_data_d = inst_buffer_data_checkpoint_q;
+        inst_buffer_is_compress_d = inst_buffer_is_compress_checkpoint_q;
+        inst_buffer_valid_d = inst_buffer_valid_checkpoint_q;
+        inst_buffer_is_prefetch_d = inst_buffer_is_prefetch_checkpoint_q;
+      end else begin
+        for (int i=0; i<ShuffleBuffSize; i++) begin
+          if (inst_buffer_is_prefetch_q[i]) begin
+            inst_buffer_valid_d[i] = 1'b0;
+          end
+          inst_buffer_is_prefetch_d[i] = 1'b0;
         end
-        inst_buffer_is_prefetch_d[i] = 1'b0;
       end
     end
   end
@@ -583,6 +625,14 @@ module shufflev_prefetch_buffer import ibex_pkg::*; #(
         inst_buffer_is_compress_q[i] <= inst_buffer_is_compress_d[i];
         inst_buffer_valid_q[i] <= inst_buffer_valid_d[i];
         inst_buffer_is_prefetch_q[i] <= inst_buffer_is_prefetch_d[i];
+
+        if (EnableCheckpoint) begin
+          inst_buffer_addr_checkpoint_q[i] <= inst_buffer_addr_checkpoint_d[i];
+          inst_buffer_data_checkpoint_q[i] <= inst_buffer_data_checkpoint_d[i];
+          inst_buffer_is_compress_checkpoint_q[i] <= inst_buffer_is_compress_checkpoint_d[i];
+          inst_buffer_valid_checkpoint_q[i] <= inst_buffer_valid_checkpoint_d[i];
+          inst_buffer_is_prefetch_checkpoint_q[i] <= inst_buffer_is_prefetch_checkpoint_d[i];
+        end
       end
     end
   end
@@ -621,6 +671,7 @@ module shufflev_prefetch_buffer import ibex_pkg::*; #(
   logic [ShuffleBuffSize-1:0]                                 inst_buffer_may_change_pc_d, inst_buffer_may_change_pc_q; // indicate whether this instruction may change PC value (branch, jump, etc.)
   logic [ShuffleBuffSize-1:0]                                 inst_buffer_is_load_d, inst_buffer_is_load_q; // indicate whether this instruction is a load
   logic [ShuffleBuffSize-1:0]                                 inst_buffer_is_store_d, inst_buffer_is_store_q; // indicate whether this instruction is a store
+  logic [ShuffleBuffSize-1:0] [ShuffleBuffSize-1:0]           inst_buffer_mem_dependency_d, inst_buffer_mem_dependency_q;
   logic [ShuffleBuffSize-1:0] [2:0]                           inst_buffer_mem_access_num_byte_d, inst_buffer_mem_access_num_byte_q;   // 1 (lb, lbu, sb), 2 (lh, lhu, sh) or 4 (lw, sw) (valid only when inst_buffer_is_load_q/inst_buffer_is_store_q is asserted)
   logic [ShuffleBuffSize-1:0]                                 inst_buffer_is_env_csr_d, inst_buffer_is_env_csr_q;       // indicate whether this instruction is an environment/csr instruction (ecall/ebreak/csr.../wfi)
 
@@ -628,8 +679,19 @@ module shufflev_prefetch_buffer import ibex_pkg::*; #(
   logic [NumPhysicalRegs-1:0]                                physical_reg_reserved_d, physical_reg_reserved_q;     // keep track of physical registers currently reserved
                                                                                                                      // (this contain identical data to logical_to_physical_reg_* but in bit vector format)
 
-  logic [NumLogicalRegs-1:0] [NumPhysicalRegsNumBits-1:0]   logical_to_physical_reg_checkpoint_d, logical_to_physical_reg_checkpoint_q; // save current physical register assignment before performing prefetch                                   
-  logic [NumPhysicalRegs-1:0]                               physical_reg_reserved_checkpoint_d, physical_reg_reserved_checkpoint_q;
+  logic [ShuffleBuffSize-1:0] [NumPhysicalRegsNumBits-1:0]  inst_buffer_rd_physical_checkpoint_d, inst_buffer_rd_physical_checkpoint_q; // checkpoint registers (at the minimum the last twos need to be save to perform prefetch)
+  logic [ShuffleBuffSize-1:0] [NumPhysicalRegsNumBits-1:0]  inst_buffer_rs1_physical_checkpoint_d, inst_buffer_rs1_physical_checkpoint_q;                     
+  logic [ShuffleBuffSize-1:0] [NumPhysicalRegsNumBits-1:0]  inst_buffer_rs2_physical_checkpoint_d, inst_buffer_rs2_physical_checkpoint_q;
+  logic [ShuffleBuffSize-1:0] [NumPhysicalRegs-1:0]         inst_buffer_physical_reg_usage_checkpoint_d, inst_buffer_physical_reg_usage_checkpoint_q;
+  logic [ShuffleBuffSize-1:0] [ShuffleBuffSize-1:0]         inst_buffer_dependency_checkpoint_d, inst_buffer_dependency_checkpoint_q;
+  logic [ShuffleBuffSize-1:0]                               inst_buffer_may_change_pc_checkpoint_d, inst_buffer_may_change_pc_checkpoint_q;
+  logic [ShuffleBuffSize-1:0]                               inst_buffer_is_load_checkpoint_d, inst_buffer_is_load_checkpoint_q;
+  logic [ShuffleBuffSize-1:0]                               inst_buffer_is_store_checkpoint_d, inst_buffer_is_store_checkpoint_q;
+  logic [ShuffleBuffSize-1:0] [ShuffleBuffSize-1:0]         inst_buffer_mem_dependency_checkpoint_d, inst_buffer_mem_dependency_checkpoint_q;
+  logic [ShuffleBuffSize-1:0] [2:0]                         inst_buffer_mem_access_num_byte_checkpoint_d, inst_buffer_mem_access_num_byte_checkpoint_q;
+  logic [ShuffleBuffSize-1:0]                               inst_buffer_is_env_csr_checkpoint_d, inst_buffer_is_env_csr_checkpoint_q;
+  logic [NumLogicalRegs-1:0] [NumPhysicalRegsNumBits-1:0]   logical_to_physical_reg_checkpoint_d, logical_to_physical_reg_checkpoint_q; // Mandatory to support prefetch         
+  logic [NumPhysicalRegs-1:0]                               physical_reg_reserved_checkpoint_d, physical_reg_reserved_checkpoint_q;     // Mandatory to support prefetch 
 
   // find the first avilable physical register by performing OR between physical_reg_reserved_q and each element of inst_buffer_physical_reg_usage_q and find the index of the rightmost 0
   // we perform OR because some physical registers might not be reserved currently but they stores data refer to by some instructions in the inst_buffer thus is not available
@@ -660,6 +722,9 @@ module shufflev_prefetch_buffer import ibex_pkg::*; #(
       inst_buffer_may_change_pc_d[i] = inst_buffer_may_change_pc_q[i];
       inst_buffer_is_load_d[i] = inst_buffer_is_load_q[i];
       inst_buffer_is_store_d[i] = inst_buffer_is_store_q[i];
+      if (EnableCheckpoint) begin
+        inst_buffer_mem_dependency_d[i] = inst_buffer_mem_dependency_q[i];
+      end
       inst_buffer_mem_access_num_byte_d[i] = inst_buffer_mem_access_num_byte_q[i];
       inst_buffer_is_env_csr_d[i] = inst_buffer_is_env_csr_q[i];
     end
@@ -667,6 +732,19 @@ module shufflev_prefetch_buffer import ibex_pkg::*; #(
       logical_to_physical_reg_d[i] = logical_to_physical_reg_q[i];
     end
     physical_reg_reserved_d = physical_reg_reserved_q;
+    if (EnableCheckpoint) begin
+      inst_buffer_rd_physical_checkpoint_d = inst_buffer_rd_physical_checkpoint_q;
+      inst_buffer_rs1_physical_checkpoint_d = inst_buffer_rs1_physical_checkpoint_q;
+      inst_buffer_rs2_physical_checkpoint_d = inst_buffer_rs2_physical_checkpoint_q;
+      inst_buffer_physical_reg_usage_checkpoint_d = inst_buffer_physical_reg_usage_checkpoint_q;
+      inst_buffer_dependency_checkpoint_d = inst_buffer_dependency_checkpoint_q;
+      inst_buffer_may_change_pc_checkpoint_d = inst_buffer_may_change_pc_checkpoint_q;
+      inst_buffer_is_load_checkpoint_d = inst_buffer_is_load_checkpoint_q;
+      inst_buffer_is_store_checkpoint_d = inst_buffer_is_store_checkpoint_q;
+      inst_buffer_mem_dependency_checkpoint_d = inst_buffer_mem_dependency_checkpoint_q;
+      inst_buffer_mem_access_num_byte_checkpoint_d = inst_buffer_mem_access_num_byte_checkpoint_q;
+      inst_buffer_is_env_csr_checkpoint_d = inst_buffer_is_env_csr_checkpoint_q;
+    end
     logical_to_physical_reg_checkpoint_d = logical_to_physical_reg_checkpoint_q;
     physical_reg_reserved_checkpoint_d = physical_reg_reserved_checkpoint_q;
 
@@ -678,6 +756,19 @@ module shufflev_prefetch_buffer import ibex_pkg::*; #(
 
     // revert physical register assignment when the branch we mispredict
     if (prefetch_predictor_miss) begin
+      if (EnableCheckpoint) begin
+        inst_buffer_rd_physical_d = inst_buffer_rd_physical_checkpoint_q;
+        inst_buffer_rs1_physical_d = inst_buffer_rs1_physical_checkpoint_q;
+        inst_buffer_rs2_physical_d = inst_buffer_rs2_physical_checkpoint_q;
+        inst_buffer_physical_reg_usage_d = inst_buffer_physical_reg_usage_checkpoint_q;
+        inst_buffer_dependency_d = inst_buffer_dependency_checkpoint_q;
+        inst_buffer_may_change_pc_d = inst_buffer_may_change_pc_checkpoint_q;
+        inst_buffer_is_load_d = inst_buffer_is_load_checkpoint_q;
+        inst_buffer_is_store_d = inst_buffer_is_store_checkpoint_q;
+        inst_buffer_mem_dependency_d = inst_buffer_mem_dependency_checkpoint_q;
+        inst_buffer_mem_access_num_byte_d = inst_buffer_mem_access_num_byte_checkpoint_q;
+        inst_buffer_is_env_csr_d = inst_buffer_is_env_csr_checkpoint_q;
+      end
       logical_to_physical_reg_d = logical_to_physical_reg_checkpoint_q;
       physical_reg_reserved_d = physical_reg_reserved_checkpoint_q;
     end 
@@ -688,6 +779,9 @@ module shufflev_prefetch_buffer import ibex_pkg::*; #(
       // clear the dependency bit of other instructions that depends on this instruction
       for (int i=0; i<ShuffleBuffSize; i++) begin
         inst_buffer_dependency_d[i][inst_buffer_remove_index] = 1'b0;
+        if (EnableCheckpoint) begin
+          inst_buffer_mem_dependency_d[i][inst_buffer_remove_index] = 1'b0;
+        end
       end
     end
 
@@ -724,6 +818,9 @@ module shufflev_prefetch_buffer import ibex_pkg::*; #(
             // otherwise we compare the register and offset for possible dependency
             if (inst_buffer_may_have_mem_dependency[i]) begin
               inst_buffer_dependency_d[inst_buffer_insert_index][i] = 1'b1;
+              if (EnableCheckpoint) begin
+                inst_buffer_mem_dependency_d[inst_buffer_insert_index][i] = 1'b1;
+              end
             end
           end else begin
             // all load/store should be done in order
@@ -755,6 +852,19 @@ module shufflev_prefetch_buffer import ibex_pkg::*; #(
       // save current physical register assignment when performing prefetch as these instructions may be discarded in the future
       // the last instruction before prefetch is always be a branch or jump and we won't fetch other branch or jump during prefetch period thus checking `prefetch_buffer_rdata_may_change_pc` is adequate
       if (prefetch_buffer_rdata_may_change_pc) begin
+        if (EnableCheckpoint) begin
+          inst_buffer_rd_physical_checkpoint_d = inst_buffer_rd_physical_q;
+          inst_buffer_rs1_physical_checkpoint_d = inst_buffer_rs1_physical_q;
+          inst_buffer_rs2_physical_checkpoint_d = inst_buffer_rs2_physical_q;
+          inst_buffer_physical_reg_usage_checkpoint_d = inst_buffer_physical_reg_usage_q;
+          inst_buffer_dependency_checkpoint_d = inst_buffer_dependency_q;
+          inst_buffer_may_change_pc_checkpoint_d = inst_buffer_may_change_pc_q;
+          inst_buffer_is_load_checkpoint_d = inst_buffer_is_load_q;
+          inst_buffer_is_store_checkpoint_d = inst_buffer_is_store_q;
+          inst_buffer_mem_dependency_checkpoint_d = inst_buffer_mem_dependency_q;
+          inst_buffer_mem_access_num_byte_checkpoint_d = inst_buffer_mem_access_num_byte_q;
+          inst_buffer_is_env_csr_checkpoint_d = inst_buffer_is_env_csr_q;
+        end
         logical_to_physical_reg_checkpoint_d = logical_to_physical_reg_d;
         physical_reg_reserved_checkpoint_d = physical_reg_reserved_d;
       end
@@ -783,6 +893,9 @@ module shufflev_prefetch_buffer import ibex_pkg::*; #(
         inst_buffer_may_change_pc_q[i] <= inst_buffer_may_change_pc_d[i];
         inst_buffer_is_load_q[i] <= inst_buffer_is_load_d[i];
         inst_buffer_is_store_q[i] <= inst_buffer_is_store_d[i];
+        if (EnableCheckpoint) begin
+          inst_buffer_mem_dependency_q[i] <= inst_buffer_mem_dependency_d[i];
+        end
         if (EnableOptimizeMem) begin
           inst_buffer_mem_access_num_byte_q[i] <= inst_buffer_mem_access_num_byte_d[i];
         end
@@ -793,6 +906,19 @@ module shufflev_prefetch_buffer import ibex_pkg::*; #(
       end
       for (int i=0; i<NumPhysicalRegs; i++) begin
         physical_reg_reserved_q[i] <= physical_reg_reserved_d[i];
+      end
+      if (EnableCheckpoint) begin
+        inst_buffer_rd_physical_checkpoint_q <= inst_buffer_rd_physical_checkpoint_d;
+        inst_buffer_rs1_physical_checkpoint_q <= inst_buffer_rs1_physical_checkpoint_d;
+        inst_buffer_rs2_physical_checkpoint_q <= inst_buffer_rs2_physical_checkpoint_d;
+        inst_buffer_physical_reg_usage_checkpoint_q <= inst_buffer_physical_reg_usage_checkpoint_d;
+        inst_buffer_dependency_checkpoint_q <= inst_buffer_dependency_checkpoint_d;
+        inst_buffer_may_change_pc_checkpoint_q <= inst_buffer_may_change_pc_checkpoint_d;
+        inst_buffer_is_load_checkpoint_q <= inst_buffer_is_load_checkpoint_d;
+        inst_buffer_is_store_checkpoint_q <= inst_buffer_is_store_checkpoint_d;
+        inst_buffer_mem_dependency_checkpoint_q <= inst_buffer_mem_dependency_checkpoint_d;
+        inst_buffer_mem_access_num_byte_checkpoint_q <= inst_buffer_mem_access_num_byte_checkpoint_d;
+        inst_buffer_is_env_csr_checkpoint_q <= inst_buffer_is_env_csr_checkpoint_d;
       end
       logical_to_physical_reg_checkpoint_q <= logical_to_physical_reg_checkpoint_d;
       physical_reg_reserved_checkpoint_q <= physical_reg_reserved_checkpoint_d;
