@@ -14,7 +14,8 @@
 #include "verilator_sim_ctrl.h"
 
 DemoSystem::DemoSystem(const char *ram_hier_path, int ram_size_words)
-    : _ram(ram_hier_path, ram_size_words, 4) {}
+    : _ram(ram_hier_path, ram_size_words, 4)
+    , _uartutil(&_top.uart_tx_o, &_top.uart_rx_i, 115200, 8, 1, 50000000) {}
 
 int DemoSystem::Main(int argc, char **argv) {
   bool exit_app;
@@ -41,6 +42,7 @@ int DemoSystem::Setup(int argc, char **argv, bool &exit_app) {
 
   _memutil.RegisterMemoryArea("ram", 0x0, &_ram);
   simctrl.RegisterExtension(&_memutil);
+  simctrl.RegisterExtension(&_uartutil);
 
   exit_app = false;
   return simctrl.ParseCommandArgs(argc, argv, exit_app);
