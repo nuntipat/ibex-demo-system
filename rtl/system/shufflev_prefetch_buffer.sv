@@ -205,22 +205,6 @@ module shufflev_prefetch_buffer import ibex_pkg::*; #(
     end
   end
 
-  /* Detect branch request due to interrupt or exception */
-
-  logic branch_i_q;
-  logic latest_branch_pc_just_executed_q2;
-  
-  always_ff @(posedge clk_i) begin
-    branch_i_q <= branch_i;
-    latest_branch_pc_just_executed_q2 <= latest_branch_pc_just_executed_q;
-  end
-
-  // branch_i will be asserted in the next cycle after jump instruction is sent to the ID/EX stage and in the next two cycle in case of a branch instruction.
-  // branch_i will not be asserted in two consecutive cycle because when branch is taken, we must get the new PC, fetch new instruction and sent to ID/EX
-  // TODO: can interrupt happen in the cycle that we expect branch?
-  logic interrupt_or_exception_jump_request;
-  assign interrupt_or_exception_jump_request = (branch_i && branch_i_q) || (branch_i && !latest_branch_pc_just_executed_q && !latest_branch_pc_just_executed_q2);
-
   /* Detect and handler wfi instruction */
 
   logic         pre_fetch_inst_is_wfi;  // assert when the previous instruction retrieve from the prefetch buffer is the wfi instruction
@@ -520,13 +504,6 @@ module shufflev_prefetch_buffer import ibex_pkg::*; #(
 
     ibex_prefetch_buffer_ready_i = 1'b0;
 
-    // flush the instruction buffer when received branch request (branch_i=1) due to interrupt or exception
-    if (interrupt_or_exception_jump_request) begin
-      for (int i=0; i<ShuffleBuffSize; i++) begin
-        inst_buffer_valid_d[i] = 1'b0;
-      end
-    end
-
     // remove entry from the instruction buffer after it was sent to the ID/EX stage. we should remove the instruction first before adding a new one 
     // as start_ptr and end_ptr may point to the same entry and the valid bit should end up being set when we remove and add instruction in the same cycle
     if (inst_buffer_to_id_ex) begin
@@ -670,12 +647,6 @@ module shufflev_prefetch_buffer import ibex_pkg::*; #(
     physical_reg_reserved_d = physical_reg_reserved_q;
     logical_to_physical_reg_checkpoint_d = logical_to_physical_reg_checkpoint_q;
     physical_reg_reserved_checkpoint_d = physical_reg_reserved_checkpoint_q;
-
-    if (interrupt_or_exception_jump_request) begin
-      for (int i=0; i<ShuffleBuffSize; i++) begin
-        inst_buffer_physical_reg_usage_d[i] = 'd0;
-      end
-    end
 
     // revert physical register assignment when the branch we mispredict
     if (prefetch_predictor_miss) begin
