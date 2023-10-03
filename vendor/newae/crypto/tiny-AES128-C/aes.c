@@ -448,11 +448,10 @@ static void Cipher(void)
 
   // Add the First round key to the state before starting the rounds.
   AddRoundKey(0); 
-  
+
   // There will be Nr rounds.
   // The first Nr-1 rounds are identical.
   // These Nr-1 rounds are executed in the loop below.
-  trigger_high();
   SubBytes();
   trigger_low();
   ShiftRows();

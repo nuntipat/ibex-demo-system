@@ -38,7 +38,7 @@ uint8_t get_pt(uint8_t* pt, uint8_t len)
 {
     aes_indep_enc_pretrigger(pt);
 
-	// trigger_high();
+	trigger_high();
 
   #ifdef ADD_JITTER
   for (volatile uint8_t k = 0; k < (*pt & 0x0F); k++);
