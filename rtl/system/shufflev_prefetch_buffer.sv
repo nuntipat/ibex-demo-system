@@ -116,10 +116,12 @@ module shufflev_prefetch_buffer import ibex_pkg::*; #(
   assign prefetch_buffer_rdata_fence = prefetch_buffer_rdata_uncompress[6:0] == 7'b0001111;
 
   logic prefetch_buffer_rdata_env_trap;
-  assign prefetch_buffer_rdata_env_trap = (prefetch_buffer_rdata_uncompress[6:0] == 7'b1110011 
+  assign prefetch_buffer_rdata_env_trap = (prefetch_buffer_rdata_uncompress[6:0] == 7'b1110011         
                                           && prefetch_buffer_rdata_uncompress[14:12] == 3'd0
-                                          && (prefetch_buffer_rdata_uncompress[22:21] == 2'b00         // ecall / ebreak
-                                              || prefetch_buffer_rdata_uncompress[22:21] == 2'b01));   // sret / mret TODO: check sfence.vma  
+                                          && (prefetch_buffer_rdata_uncompress[22:21] == 2'b00        // ecall / ebreak
+                                              || prefetch_buffer_rdata_uncompress[22:21] == 2'b01     // sret / mret  
+                                              || prefetch_buffer_rdata_uncompress[22:21] == 2'b10));  // wfi
+                                                                                                      // TODO: check sfence.vma 
 
   logic prefetch_buffer_rdata_may_change_pc;
   assign prefetch_buffer_rdata_may_change_pc = prefetch_buffer_rdata_branch || prefetch_buffer_rdata_jal || prefetch_buffer_rdata_jalr || prefetch_buffer_rdata_fence || prefetch_buffer_rdata_env_trap;
@@ -431,8 +433,7 @@ module shufflev_prefetch_buffer import ibex_pkg::*; #(
           prefetch_predictor_predict_taken_d = 1'b1;
           prefetch_predictor_predict_branch_d = 1'b0;
         end else begin
-          // continue fetch the next instruction
-          // TODO: handle fench etc.
+          // Prediction logic for this instruction is not yet implemented so we can't perform prefetch
           prefetch_predictor_predict_taken_d = 1'b0;
           prefetch_predictor_predict_branch_d = 1'b0;
         end
