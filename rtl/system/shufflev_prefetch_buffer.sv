@@ -722,7 +722,7 @@ module shufflev_prefetch_buffer import ibex_pkg::*; #(
           if (EnableOptimizeMem) begin
             // when the instruction buffer only contain load instruction and new instruction is a load, there won't be any dependency.
             // otherwise we compare the register and offset for possible dependency
-            if (inst_buffer_may_have_mem_dependency[i]) begin
+            if (inst_buffer_may_have_mem_dependency[i] && (prefetch_buffer_rdata_load || prefetch_buffer_rdata_store)) begin
               inst_buffer_dependency_d[inst_buffer_insert_index][i] = 1'b1;
             end
           end else begin
@@ -839,8 +839,6 @@ module shufflev_prefetch_buffer import ibex_pkg::*; #(
       end
     end
   end else begin
-    assign inst_buffer_mem_access_num_byte_d = 'd0;
-    assign inst_buffer_mem_access_num_byte_q = 'd0;
     assign inst_buffer_may_have_mem_dependency = 'd0;
 
     logic [ShuffleBuffSize-1:0] [2:0] unused_inst_buffer_mem_access_num_byte_d, unused_inst_buffer_mem_access_num_byte_q; 
