@@ -452,15 +452,15 @@ static void Cipher(void)
   // There will be Nr rounds.
   // The first Nr-1 rounds are identical.
   // These Nr-1 rounds are executed in the loop below.
-  for(round = 1; round < Nr; ++round)
+  trigger_high();
+  SubBytes();
+  trigger_low();
+  ShiftRows();
+  MixColumns();
+  AddRoundKey(1);
+  for(round = 2; round < Nr; ++round)
   {
-    if (round == 1) {
-      trigger_high();
-    }
-      SubBytes();
-    if (round == 1) {
-      trigger_low();
-    }
+    SubBytes();
     ShiftRows();
     MixColumns();
     AddRoundKey(round);
