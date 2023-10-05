@@ -7,10 +7,10 @@ module shufflev_prefetch_buffer import ibex_pkg::*; #(
   parameter int unsigned    RngSeed           = 123456,
   parameter bit             EnableFetchId     = 1'b0,
   parameter bit             EnableFastBranch  = 1'b1,
-  parameter bit             EnablePrefetch    = 1'b1,
-  parameter bit             EnableBranchPredictor = 1'b1,
+  parameter bit             EnablePrefetch    = 1'b0,
+  parameter bit             EnableBranchPredictor = 1'b0,
   parameter shufflev_branch_predictor_e BranchPredictorAlgorithm = BranchOffset,
-  parameter bit             EnableOptimizeJal = 1'b1,
+  parameter bit             EnableOptimizeJal = 1'b0,
   parameter bit             EnableOptimizeMem = 1'b1,
   parameter int unsigned    NumBranchPredictorEntry = 16,
   parameter bit             DisplayBranchPredictionStat = 1'b0,
@@ -45,7 +45,15 @@ module shufflev_prefetch_buffer import ibex_pkg::*; #(
   input  logic        instr_rvalid_i,
 
   // Prefetch Buffer Status
-  output logic        busy_o    // avoid clock gate
+  output logic        busy_o,    // avoid clock gate
+
+  // goes to register file
+  output logic [5:0] raddr_c_o,
+  input logic [31:0] rdata_c_i,
+
+  input logic [5:0]  waddr_a_i,
+  input logic [31:0] wdata_a_i,
+  input logic        we_a_i
 );
 
   localparam int unsigned ShuffleBuffSizeNumBits = $clog2(ShuffleBuffSize);
@@ -133,8 +141,13 @@ module shufflev_prefetch_buffer import ibex_pkg::*; #(
   assign prefetch_buffer_rdata_store = (prefetch_buffer_rdata_uncompress[6:0] == 7'b0100011); // store
 
   logic [2:0] prefetch_buffer_rdata_mem_access_num_byte;  // 1 (lb, lbu, sb), 2 (lh, lhu, sh) or 4 (lw, sw) 
-  logic [11:0] prefetch_buffer_rdata_mem_access_offset;
+  logic [31:0] prefetch_buffer_rdata_mem_access_offset;   // sign-extended version of the 12-bit offset of the load and store instruction
+  logic prefetch_buffer_rdata_mem_access_address_valid;   // indicate whether the target memory address is valid or not (the address may be invalid if the source register hasn't been written by prior instruction)
+  logic [31:0] prefetch_buffer_rdata_mem_access_address;  // target memory address of the load and store instruction 
   if (EnableOptimizeMem) begin
+    // we can also assign 'raddr_c_o' to 'logical_to_physical_reg_q[current_uncompressed_opcode_rs1]' permanantly but doing it this way might save some power
+    assign raddr_c_o = (prefetch_buffer_to_inst_buffer && (prefetch_buffer_rdata_load || prefetch_buffer_rdata_store)) ? logical_to_physical_reg_q[current_uncompressed_opcode_rs1] : 6'd0;
+
     always_comb begin
       if (prefetch_buffer_rdata_uncompress[13:12] == 2'b00) begin
         prefetch_buffer_rdata_mem_access_num_byte = 3'd1;
@@ -145,20 +158,37 @@ module shufflev_prefetch_buffer import ibex_pkg::*; #(
       end
 
       if (prefetch_buffer_rdata_load) begin
-        prefetch_buffer_rdata_mem_access_offset = prefetch_buffer_rdata_uncompress[31:20];
+        prefetch_buffer_rdata_mem_access_offset = {{20{prefetch_buffer_rdata_uncompress[31]}}, prefetch_buffer_rdata_uncompress[31:20]};
       end else begin
-        prefetch_buffer_rdata_mem_access_offset = {prefetch_buffer_rdata_uncompress[31:25], prefetch_buffer_rdata_uncompress[11:7]};
+        prefetch_buffer_rdata_mem_access_offset = {{20{prefetch_buffer_rdata_uncompress[31]}}, prefetch_buffer_rdata_uncompress[31:25], prefetch_buffer_rdata_uncompress[11:7]};
       end
+
+      prefetch_buffer_rdata_mem_access_address_valid = 1'b1;
+      for (int i=0; i<ShuffleBuffSize; i++) begin
+        // If there is another instruction that will write to our RS1, the target memory address calculated now is not valid.
+        if (inst_buffer_valid_q[i] && (inst_buffer_rd_physical_q[i] != 0) && (inst_buffer_rd_physical_q[i] == logical_to_physical_reg_q[current_uncompressed_opcode_rs1])) begin
+          prefetch_buffer_rdata_mem_access_address_valid = 1'b0;
+        end
+      end
+      prefetch_buffer_rdata_mem_access_address = rdata_c_i + prefetch_buffer_rdata_mem_access_offset;
     end
   end else begin
     assign prefetch_buffer_rdata_mem_access_num_byte = 3'd0;
     assign prefetch_buffer_rdata_mem_access_offset = 12'd0;
+    assign prefetch_buffer_rdata_mem_access_address_valid = 1'b0;
+    assign prefetch_buffer_rdata_mem_access_address = 32'd0;
 
     logic [2:0] unused_prefetch_buffer_rdata_mem_access_num_byte;
     assign unused_prefetch_buffer_rdata_mem_access_num_byte = prefetch_buffer_rdata_mem_access_num_byte;
 
     logic [11:0] unused_prefetch_buffer_rdata_mem_access_offset;
     assign unused_prefetch_buffer_rdata_mem_access_offset = prefetch_buffer_rdata_mem_access_offset;
+
+    logic unused_prefetch_buffer_rdata_mem_access_address_valid;
+    assign unused_prefetch_buffer_rdata_mem_access_address_valid = prefetch_buffer_rdata_mem_access_address_valid;
+
+    logic [31:0] unused_prefetch_buffer_rdata_mem_access_address;
+    assign unused_prefetch_buffer_rdata_mem_access_address = prefetch_buffer_rdata_mem_access_address;
   end
 
   logic prefetch_buffer_rdata_synch_env_csr;
@@ -599,6 +629,8 @@ module shufflev_prefetch_buffer import ibex_pkg::*; #(
   logic [ShuffleBuffSize-1:0]                                 inst_buffer_may_change_pc_d, inst_buffer_may_change_pc_q; // indicate whether this instruction may change PC value (branch, jump, etc.)
   logic [ShuffleBuffSize-1:0]                                 inst_buffer_is_load_d, inst_buffer_is_load_q; // indicate whether this instruction is a load
   logic [ShuffleBuffSize-1:0]                                 inst_buffer_is_store_d, inst_buffer_is_store_q; // indicate whether this instruction is a store
+  logic [ShuffleBuffSize-1:0]                                 inst_buffer_mem_access_addr_valid_d, inst_buffer_mem_access_addr_valid_q; // indicate whether the target memory address is valid or not
+  logic [ShuffleBuffSize-1:0] [31:0]                          inst_buffer_mem_access_addr_d, inst_buffer_mem_access_addr_q; // store the target memory address
   logic [ShuffleBuffSize-1:0] [2:0]                           inst_buffer_mem_access_num_byte_d, inst_buffer_mem_access_num_byte_q;   // 1 (lb, lbu, sb), 2 (lh, lhu, sh) or 4 (lw, sw) (valid only when inst_buffer_is_load_q/inst_buffer_is_store_q is asserted)
   logic [ShuffleBuffSize-1:0]                                 inst_buffer_is_env_csr_d, inst_buffer_is_env_csr_q;       // indicate whether this instruction is an environment/csr instruction (ecall/ebreak/csr.../wfi)
 
@@ -638,7 +670,11 @@ module shufflev_prefetch_buffer import ibex_pkg::*; #(
       inst_buffer_may_change_pc_d[i] = inst_buffer_may_change_pc_q[i];
       inst_buffer_is_load_d[i] = inst_buffer_is_load_q[i];
       inst_buffer_is_store_d[i] = inst_buffer_is_store_q[i];
-      inst_buffer_mem_access_num_byte_d[i] = inst_buffer_mem_access_num_byte_q[i];
+      if (EnableOptimizeMem) begin
+        inst_buffer_mem_access_addr_valid_d[i] = inst_buffer_mem_access_addr_valid_q[i];
+        inst_buffer_mem_access_addr_d[i] = inst_buffer_mem_access_addr_q[i];
+        inst_buffer_mem_access_num_byte_d[i] = inst_buffer_mem_access_num_byte_q[i];
+      end
       inst_buffer_is_env_csr_d[i] = inst_buffer_is_env_csr_q[i];
     end
     for (int i=0; i<NumLogicalRegs; i++) begin
@@ -692,10 +728,18 @@ module shufflev_prefetch_buffer import ibex_pkg::*; #(
             inst_buffer_dependency_d[inst_buffer_insert_index][i] = 1'b1;
           end
           if (EnableOptimizeMem) begin
-            // when the instruction buffer only contain load instruction and new instruction is a load, there won't be any dependency.
-            // otherwise we compare the register and offset for possible dependency
-            if (inst_buffer_may_have_mem_dependency[i] && (prefetch_buffer_rdata_load || prefetch_buffer_rdata_store)) begin
-              inst_buffer_dependency_d[inst_buffer_insert_index][i] = 1'b1;
+            if ((inst_buffer_is_load_q[i] || inst_buffer_is_store_q[i]) && (prefetch_buffer_rdata_load || prefetch_buffer_rdata_store)) begin
+              if (inst_buffer_is_load_q[i] && prefetch_buffer_rdata_load) begin   // Several load operations can be shuffled freely even though their addresses overlap
+                // do nothing
+              end else if (!inst_buffer_mem_access_addr_valid_q[i] || !prefetch_buffer_rdata_mem_access_address_valid) begin // Assume dependency exist if the address hasn't been resolved
+                inst_buffer_dependency_d[inst_buffer_insert_index][i] = 1'b1;
+              end else if (prefetch_buffer_rdata_mem_access_address >= inst_buffer_mem_access_addr_q[i] 
+                        && prefetch_buffer_rdata_mem_access_address < inst_buffer_mem_access_addr_q[i] + {29'd0, inst_buffer_mem_access_num_byte_q[i]}) begin  // Check the address for possible overlap. 
+                inst_buffer_dependency_d[inst_buffer_insert_index][i] = 1'b1;
+              end else if (inst_buffer_mem_access_addr_q[i] >= prefetch_buffer_rdata_mem_access_address
+                        && inst_buffer_mem_access_addr_q[i] < prefetch_buffer_rdata_mem_access_address + {29'd0, prefetch_buffer_rdata_mem_access_num_byte}) begin
+                inst_buffer_dependency_d[inst_buffer_insert_index][i] = 1'b1;
+              end
             end
           end else begin
             // all load/store should be done in order
@@ -720,6 +764,8 @@ module shufflev_prefetch_buffer import ibex_pkg::*; #(
       inst_buffer_is_load_d[inst_buffer_insert_index] = prefetch_buffer_rdata_load;
       inst_buffer_is_store_d[inst_buffer_insert_index] = prefetch_buffer_rdata_store;
       if (EnableOptimizeMem) begin
+        inst_buffer_mem_access_addr_valid_d[inst_buffer_insert_index] = prefetch_buffer_rdata_mem_access_address_valid;
+        inst_buffer_mem_access_addr_d[inst_buffer_insert_index] = prefetch_buffer_rdata_mem_access_address;
         inst_buffer_mem_access_num_byte_d[inst_buffer_insert_index] = prefetch_buffer_rdata_mem_access_num_byte;
       end
       inst_buffer_is_env_csr_d[inst_buffer_insert_index] = prefetch_buffer_rdata_synch_env_csr;
@@ -731,6 +777,49 @@ module shufflev_prefetch_buffer import ibex_pkg::*; #(
         physical_reg_reserved_checkpoint_d = physical_reg_reserved_d;
       end
     end
+  
+    // if (EnableOptimizeMem) begin
+    //   // when the ID/EX stage write to a register, we check to update the target memory address of all dependent instructions in the shuffle buffer
+    //   if (we_a_i) begin
+    //     for (int i=0; i<ShuffleBuffSize; i++) begin
+    //       if (inst_buffer_valid_q[i] && (inst_buffer_is_load_q[i] || inst_buffer_is_store_q[i]) && (inst_buffer_rs1_physical_q[i] == waddr_a_i)) begin
+    //         inst_buffer_mem_access_addr_valid_d[i] = 1'b1;
+    //         if (inst_buffer_is_load_q[i]) begin
+    //           inst_buffer_mem_access_addr_d[i] = wdata_a_i + {{20{inst_buffer_data_q[i][31]}}, inst_buffer_data_q[i][31:20]};
+    //         end else begin
+    //           inst_buffer_mem_access_addr_d[i] = wdata_a_i + {{20{inst_buffer_data_q[i][31]}}, inst_buffer_data_q[i][31:25], inst_buffer_data_q[i][11:7]};
+    //         end
+    //       end
+    //     end
+    //   end
+
+    //   // reevaluate dependencies among memory operation
+    //   for (int i=0; i<ShuffleBuffSize; i++) begin
+    //     for (int j=0; j<ShuffleBuffSize; j++) begin
+    //       if ((inst_buffer_valid_q[i] && (inst_buffer_is_load_q[i] || inst_buffer_is_store_q[i])) 
+    //         && (inst_buffer_valid_q[j] && (inst_buffer_is_load_q[j] || inst_buffer_is_store_q[j]))
+    //         && inst_buffer_dependency_q[i][j]) begin
+    //         // We deassert the dependency bit if the following conditions are true
+    //         //  1) when inst[i] is a store and inst[j] is a load, inst_buffer[j].rd != inst_buffer[i].rs1 / rs2 (normal data dependency not exist)
+    //         //  2) the target address should not be overlapped
+    //         if (inst_buffer_is_store_q[i] && inst_buffer_is_load_q[j]) begin
+    //           if ((inst_buffer_rd_physical_q[j] == inst_buffer_rs1_physical_q[i]) || (inst_buffer_rd_physical_q[j] == inst_buffer_rs2_physical_q[i])) begin
+    //             continue;
+    //           end
+    //         end
+    //         if (inst_buffer_mem_access_addr_d[i] >= inst_buffer_mem_access_addr_q[j] 
+    //             && inst_buffer_mem_access_addr_d[i] < inst_buffer_mem_access_addr_q[j] + {29'd0, inst_buffer_mem_access_num_byte_q[j]}) begin
+    //           continue;
+    //         end 
+    //         if (inst_buffer_mem_access_addr_q[j] >= inst_buffer_mem_access_addr_d[i]
+    //             && inst_buffer_mem_access_addr_q[j] < inst_buffer_mem_access_addr_d[i] + {29'd0, inst_buffer_mem_access_num_byte_q[i]}) begin
+    //           continue;
+    //         end
+    //         inst_buffer_dependency_d[i][j] = 1'b0;
+    //       end
+    //     end
+    //   end
+    // end
   end
 
   always_ff @(posedge clk_i or negedge rst_ni) begin
@@ -756,6 +845,8 @@ module shufflev_prefetch_buffer import ibex_pkg::*; #(
         inst_buffer_is_load_q[i] <= inst_buffer_is_load_d[i];
         inst_buffer_is_store_q[i] <= inst_buffer_is_store_d[i];
         if (EnableOptimizeMem) begin
+          inst_buffer_mem_access_addr_valid_q[i] <= inst_buffer_mem_access_addr_valid_d[i];
+          inst_buffer_mem_access_addr_q[i] <= inst_buffer_mem_access_addr_d[i];
           inst_buffer_mem_access_num_byte_q[i] <= inst_buffer_mem_access_num_byte_d[i];
         end
         inst_buffer_is_env_csr_q[i] <= inst_buffer_is_env_csr_d[i];
@@ -770,55 +861,6 @@ module shufflev_prefetch_buffer import ibex_pkg::*; #(
       physical_reg_reserved_checkpoint_q <= physical_reg_reserved_checkpoint_d;
     end
   end  
-
-  /* Optimize memory access logic */
-
-  logic [ShuffleBuffSize-1:0]       inst_buffer_may_have_mem_dependency;
-
-  if (EnableOptimizeMem) begin
-    // assert when there is no store instruction in the instruction buffer
-    logic inst_buffer_no_store_inst;
-    assign inst_buffer_no_store_inst = !(|(inst_buffer_is_store_q & inst_buffer_valid_q));
-
-    // check the source register and offset for possible overlap
-    logic [ShuffleBuffSize-1:0] [11:0] inst_buffer_mem_access_offset;
-    always_comb begin
-      // pre-extract the offset to simplify following logic
-      for (int i=0; i<ShuffleBuffSize; i++) begin
-        if (prefetch_buffer_rdata_load) begin
-          inst_buffer_mem_access_offset[i] = prefetch_buffer_rdata_uncompress[31:20];
-        end else begin
-          inst_buffer_mem_access_offset[i] = {prefetch_buffer_rdata_uncompress[31:25], prefetch_buffer_rdata_uncompress[11:7]};
-        end
-      end
-
-      for (int i=0; i<ShuffleBuffSize; i++) begin
-        inst_buffer_may_have_mem_dependency[i] = 1'b0;
-
-        if (!inst_buffer_is_load_q[i] && !inst_buffer_is_store_q[i]) begin
-          inst_buffer_may_have_mem_dependency[i] = 1'b0;
-        end else if (prefetch_buffer_rdata_load && inst_buffer_no_store_inst) begin
-          inst_buffer_may_have_mem_dependency[i] = 1'b0;
-        end else if (logical_to_physical_reg_q[current_uncompressed_opcode_rs1] != inst_buffer_rs1_physical_q[i]) begin   // we don't know the exact value of register so assume dependency exist if the register matches
-          inst_buffer_may_have_mem_dependency[i] = 1'b1;
-        end else if ({prefetch_buffer_rdata_mem_access_offset[11], prefetch_buffer_rdata_mem_access_offset} >= {inst_buffer_mem_access_offset[i][11], inst_buffer_mem_access_offset[i]}
-                  && {prefetch_buffer_rdata_mem_access_offset[11], prefetch_buffer_rdata_mem_access_offset} <= inst_buffer_mem_access_offset[i] + 12'(inst_buffer_mem_access_num_byte_q[i]) - 12'd1) begin  // if the register matches, we check the offset for overlap
-          inst_buffer_may_have_mem_dependency[i] = 1'b1;
-        end else if ({inst_buffer_mem_access_offset[i][11], inst_buffer_mem_access_offset[i]} >= {prefetch_buffer_rdata_mem_access_offset[11], prefetch_buffer_rdata_mem_access_offset}
-                  && {inst_buffer_mem_access_offset[i][11], inst_buffer_mem_access_offset[i]} <= prefetch_buffer_rdata_mem_access_offset + 12'(prefetch_buffer_rdata_mem_access_num_byte) - 12'd1) begin
-          inst_buffer_may_have_mem_dependency[i] = 1'b1;
-        end
-      end
-    end
-  end else begin
-    assign inst_buffer_may_have_mem_dependency = 'd0;
-
-    logic [ShuffleBuffSize-1:0] [2:0] unused_inst_buffer_mem_access_num_byte_d, unused_inst_buffer_mem_access_num_byte_q; 
-    logic [ShuffleBuffSize-1:0]       unused_inst_buffer_may_have_mem_dependency;
-    assign unused_inst_buffer_mem_access_num_byte_d = inst_buffer_mem_access_num_byte_d;
-    assign unused_inst_buffer_mem_access_num_byte_q = inst_buffer_mem_access_num_byte_q;
-    assign unused_inst_buffer_may_have_mem_dependency = inst_buffer_may_have_mem_dependency;
-  end
 
   /* Random logic */ 
 

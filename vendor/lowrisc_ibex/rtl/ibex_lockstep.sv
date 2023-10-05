@@ -373,11 +373,13 @@ module ibex_lockstep import ibex_pkg::*; #(
     .dummy_instr_wb_o    (shadow_outputs_d.dummy_instr_wb),
     .rf_raddr_a_o        (shadow_outputs_d.rf_raddr_a),
     .rf_raddr_b_o        (shadow_outputs_d.rf_raddr_b),
+    .rf_raddr_c_o        (),
     .rf_waddr_wb_o       (shadow_outputs_d.rf_waddr_wb),
     .rf_we_wb_o          (shadow_outputs_d.rf_we_wb),
     .rf_wdata_wb_ecc_o   (shadow_outputs_d.rf_wdata_wb_ecc),
     .rf_rdata_a_ecc_i    (shadow_inputs_q[0].rf_rdata_a_ecc),
     .rf_rdata_b_ecc_i    (shadow_inputs_q[0].rf_rdata_b_ecc),
+    .rf_rdata_c_ecc_i    (),
 
     .ic_tag_req_o        (shadow_outputs_d.ic_tag_req),
     .ic_tag_write_o      (shadow_outputs_d.ic_tag_write),

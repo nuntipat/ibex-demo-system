@@ -122,7 +122,15 @@ module ibex_if_stage import ibex_pkg::*; #(
 
   // misc signals
   output logic                        pc_mismatch_alert_o,
-  output logic                        if_busy_o                 // IF stage is busy fetching instr
+  output logic                        if_busy_o,                 // IF stage is busy fetching instr
+
+  // shufflev signals
+  output logic [5:0]                  raddr_c_o,
+  input logic [31:0]                  rdata_c_i,
+
+  input logic [5:0]                   waddr_a_i,
+  input logic [31:0]                  wdata_a_i,
+  input logic                         we_a_i
 );
 
   logic              instr_valid_id_d, instr_valid_id_q;
@@ -355,7 +363,14 @@ module ibex_if_stage import ibex_pkg::*; #(
         .instr_rdata_i       ( instr_rdata_i[31:0]        ),
         .instr_err_i         ( instr_err                  ),
 
-        .busy_o              ( prefetch_busy              )
+        .busy_o              ( prefetch_busy              ),
+
+        .raddr_c_o           ( raddr_c_o                  ),
+        .rdata_c_i           ( rdata_c_i                  ),
+
+        .waddr_a_i           ( waddr_a_i                  ),
+        .wdata_a_i           ( wdata_a_i                  ),
+        .we_a_i              ( we_a_i                     )
     );
     // ICache tieoffs
     logic                   unused_icen, unused_icinv, unused_scr_key_valid;

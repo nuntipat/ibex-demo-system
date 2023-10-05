@@ -79,11 +79,13 @@ module ibex_core import ibex_pkg::*; #(
   output logic                         dummy_instr_wb_o,
   output logic [$clog2(NumPhysicalRegs)-1:0]                   rf_raddr_a_o,
   output logic [$clog2(NumPhysicalRegs)-1:0]                   rf_raddr_b_o,
+  output logic [$clog2(NumPhysicalRegs)-1:0]                   rf_raddr_c_o,
   output logic [$clog2(NumPhysicalRegs)-1:0]                   rf_waddr_wb_o,
   output logic                         rf_we_wb_o,
   output logic [RegFileDataWidth-1:0]  rf_wdata_wb_ecc_o,
   input  logic [RegFileDataWidth-1:0]  rf_rdata_a_ecc_i,
   input  logic [RegFileDataWidth-1:0]  rf_rdata_b_ecc_i,
+  input  logic [RegFileDataWidth-1:0]  rf_rdata_c_ecc_i,
 
   // RAMs interface
   output logic [IC_NUM_WAYS-1:0]       ic_tag_req_o,
@@ -508,7 +510,15 @@ module ibex_core import ibex_pkg::*; #(
     .id_in_ready_i(id_in_ready),
 
     .pc_mismatch_alert_o(pc_mismatch_alert),
-    .if_busy_o          (if_busy)
+    .if_busy_o          (if_busy),
+
+    // shufflev signals
+    .raddr_c_o        (rf_raddr_c_o),
+    .rdata_c_i        (rf_rdata_c_ecc_i),
+
+    .waddr_a_i        (rf_waddr_wb_o),
+    .wdata_a_i        (rf_wdata_wb_ecc_o),
+    .we_a_i           (rf_we_wb_o)
   );
 
   // Core is waiting for the ISide when ID/EX stage is ready for a new instruction but none are
