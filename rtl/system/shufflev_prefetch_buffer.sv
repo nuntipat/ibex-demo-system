@@ -5,7 +5,7 @@ module shufflev_prefetch_buffer import ibex_pkg::*; #(
   parameter int unsigned    NumPhysicalRegs   = 64,
   parameter shufflev_rng_e  RngType           = RandomTkacik,
   parameter int unsigned    RngSeed           = 123456,
-  parameter bit             EnableFetchId     = 1'b0,
+  parameter bit             EnableFetchId     = 1'b1,
   parameter bit             EnableFastBranch  = 1'b1,
   parameter bit             EnablePrefetch    = 1'b0,
   parameter bit             EnableBranchPredictor = 1'b0,
@@ -146,7 +146,7 @@ module shufflev_prefetch_buffer import ibex_pkg::*; #(
   logic [31:0] prefetch_buffer_rdata_mem_access_address;  // target memory address of the load and store instruction 
   if (EnableOptimizeMem) begin
     // we can also assign 'raddr_c_o' to 'logical_to_physical_reg_q[current_uncompressed_opcode_rs1]' permanantly but doing it this way might save some power
-    assign raddr_c_o = (prefetch_buffer_to_inst_buffer && (prefetch_buffer_rdata_load || prefetch_buffer_rdata_store)) ? logical_to_physical_reg_q[current_uncompressed_opcode_rs1] : 6'd0;
+    assign raddr_c_o = (prefetch_buffer_to_inst_buffer && (prefetch_buffer_rdata_load || prefetch_buffer_rdata_store)) ? logical_to_physical_reg_q[current_uncompressed_opcode_rs1] : 'd0;
 
     always_comb begin
       if (prefetch_buffer_rdata_uncompress[13:12] == 2'b00) begin
@@ -174,14 +174,14 @@ module shufflev_prefetch_buffer import ibex_pkg::*; #(
     end
   end else begin
     assign prefetch_buffer_rdata_mem_access_num_byte = 3'd0;
-    assign prefetch_buffer_rdata_mem_access_offset = 12'd0;
+    assign prefetch_buffer_rdata_mem_access_offset = 32'd0;
     assign prefetch_buffer_rdata_mem_access_address_valid = 1'b0;
     assign prefetch_buffer_rdata_mem_access_address = 32'd0;
 
     logic [2:0] unused_prefetch_buffer_rdata_mem_access_num_byte;
     assign unused_prefetch_buffer_rdata_mem_access_num_byte = prefetch_buffer_rdata_mem_access_num_byte;
 
-    logic [11:0] unused_prefetch_buffer_rdata_mem_access_offset;
+    logic [31:0] unused_prefetch_buffer_rdata_mem_access_offset;
     assign unused_prefetch_buffer_rdata_mem_access_offset = prefetch_buffer_rdata_mem_access_offset;
 
     logic unused_prefetch_buffer_rdata_mem_access_address_valid;
@@ -729,15 +729,22 @@ module shufflev_prefetch_buffer import ibex_pkg::*; #(
           end
           if (EnableOptimizeMem) begin
             if ((inst_buffer_is_load_q[i] || inst_buffer_is_store_q[i]) && (prefetch_buffer_rdata_load || prefetch_buffer_rdata_store)) begin
-              if (inst_buffer_is_load_q[i] && prefetch_buffer_rdata_load) begin   // Several load operations can be shuffled freely even though their addresses overlap
-                // do nothing
-              end else if (!inst_buffer_mem_access_addr_valid_q[i] || !prefetch_buffer_rdata_mem_access_address_valid) begin // Assume dependency exist if the address hasn't been resolved
+              /*if (inst_buffer_mem_access_addr_valid_q[i] && (inst_buffer_mem_access_addr_q[i] < 'h100000 || inst_buffer_mem_access_addr_q[i] > 'h200000)
+                && prefetch_buffer_rdata_mem_access_address_valid && (prefetch_buffer_rdata_mem_access_address < 'h100000 || prefetch_buffer_rdata_mem_access_address > 'h200000)) begin
                 inst_buffer_dependency_d[inst_buffer_insert_index][i] = 1'b1;
-              end else if (prefetch_buffer_rdata_mem_access_address >= inst_buffer_mem_access_addr_q[i] 
+              end else if (inst_buffer_is_load_q[i] && prefetch_buffer_rdata_load) begin   // Several load operations can be shuffled freely even though their addresses overlap
+                // do nothing
+              end else*/ if ((!inst_buffer_mem_access_addr_valid_q[i] || !prefetch_buffer_rdata_mem_access_address_valid)) begin // Assume dependency exist if the address hasn't been resolved
+                                                  // && ((inst_buffer_rs1_physical_q[i] != logical_to_physical_reg_q[current_uncompressed_opcode_rs1]) || )
+                inst_buffer_dependency_d[inst_buffer_insert_index][i] = 1'b1;
+              end else if (inst_buffer_mem_access_addr_valid_q[i] && (inst_buffer_mem_access_addr_q[i] < 'h00100000 || inst_buffer_mem_access_addr_q[i] > 'h00200000)
+                && prefetch_buffer_rdata_mem_access_address_valid && (prefetch_buffer_rdata_mem_access_address < 'h00100000 || prefetch_buffer_rdata_mem_access_address > 'h00200000)) begin
+                inst_buffer_dependency_d[inst_buffer_insert_index][i] = 1'b1;
+              end else if (prefetch_buffer_rdata_mem_access_address >= inst_buffer_mem_access_addr_q[i]  
                         && prefetch_buffer_rdata_mem_access_address < inst_buffer_mem_access_addr_q[i] + {29'd0, inst_buffer_mem_access_num_byte_q[i]}) begin  // Check the address for possible overlap. 
                 inst_buffer_dependency_d[inst_buffer_insert_index][i] = 1'b1;
-              end else if (inst_buffer_mem_access_addr_q[i] >= prefetch_buffer_rdata_mem_access_address
-                        && inst_buffer_mem_access_addr_q[i] < prefetch_buffer_rdata_mem_access_address + {29'd0, prefetch_buffer_rdata_mem_access_num_byte}) begin
+              end else if (prefetch_buffer_rdata_mem_access_address + {29'd0, prefetch_buffer_rdata_mem_access_num_byte} >= inst_buffer_mem_access_addr_q[i]  
+                        && prefetch_buffer_rdata_mem_access_address + {29'd0, prefetch_buffer_rdata_mem_access_num_byte} < inst_buffer_mem_access_addr_q[i] + {29'd0, inst_buffer_mem_access_num_byte_q[i]}) begin
                 inst_buffer_dependency_d[inst_buffer_insert_index][i] = 1'b1;
               end
             end
@@ -821,6 +828,17 @@ module shufflev_prefetch_buffer import ibex_pkg::*; #(
     //   end
     // end
   end
+
+  // logic [31:0] unused_rdata_c_i;
+  // assign raddr_c_o = 6'd0;
+  // assign unused_rdata_c_i = rdata_c_i;
+
+  logic [31:0] unused_wdata_a_i;
+  logic unused_we_a_i;
+  logic [5:0] unused_waddr_a_i;
+  assign unused_wdata_a_i = wdata_a_i;
+  assign unused_we_a_i = we_a_i;
+  assign unused_waddr_a_i = waddr_a_i;
 
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
