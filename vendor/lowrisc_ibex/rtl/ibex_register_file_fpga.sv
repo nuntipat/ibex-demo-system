@@ -58,7 +58,7 @@ module ibex_register_file_fpga #(
   assign rdata_b_o = (raddr_b_i == '0) ? '0 : mem[raddr_b_i];
 
   // async_read c
-  assign rdata_c_o = (raddr_c_i == '0) ? '0 : mem[raddr_c_i];
+  assign rdata_c_o = (raddr_c_i == '0) ? '0 : (((raddr_c_i == waddr_a_i) && we_a_i) ? wdata_a_i : mem[raddr_c_i]);
 
   // we select
   assign we = (waddr_a_i == '0) ? 1'b0 : we_a_i;
