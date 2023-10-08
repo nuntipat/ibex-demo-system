@@ -729,22 +729,18 @@ module shufflev_prefetch_buffer import ibex_pkg::*; #(
           end
           if (EnableOptimizeMem) begin
             if ((inst_buffer_is_load_q[i] || inst_buffer_is_store_q[i]) && (prefetch_buffer_rdata_load || prefetch_buffer_rdata_store)) begin
-              /*if (inst_buffer_mem_access_addr_valid_q[i] && (inst_buffer_mem_access_addr_q[i] < 'h100000 || inst_buffer_mem_access_addr_q[i] > 'h200000)
-                && prefetch_buffer_rdata_mem_access_address_valid && (prefetch_buffer_rdata_mem_access_address < 'h100000 || prefetch_buffer_rdata_mem_access_address > 'h200000)) begin
+              if (!inst_buffer_mem_access_addr_valid_q[i] || !prefetch_buffer_rdata_mem_access_address_valid) begin // Assume dependency exist if the address hasn't been resolved
                 inst_buffer_dependency_d[inst_buffer_insert_index][i] = 1'b1;
-              end else if (inst_buffer_is_load_q[i] && prefetch_buffer_rdata_load) begin   // Several load operations can be shuffled freely even though their addresses overlap
+              end else if (inst_buffer_mem_access_addr_valid_q[i] && (inst_buffer_mem_access_addr_q[i] < 'h100000 || inst_buffer_mem_access_addr_q[i] > 'h200000)
+                && prefetch_buffer_rdata_mem_access_address_valid && (prefetch_buffer_rdata_mem_access_address < 'h100000 || prefetch_buffer_rdata_mem_access_address > 'h200000)) begin  // Memory-mapped IO should be done sequentially
+                inst_buffer_dependency_d[inst_buffer_insert_index][i] = 1'b1;
+              end else  if (inst_buffer_is_load_q[i] && prefetch_buffer_rdata_load) begin   // Several load operations can be shuffled freely even though their addresses overlap
                 // do nothing
-              end else*/ if ((!inst_buffer_mem_access_addr_valid_q[i] || !prefetch_buffer_rdata_mem_access_address_valid)) begin // Assume dependency exist if the address hasn't been resolved
-                                                  // && ((inst_buffer_rs1_physical_q[i] != logical_to_physical_reg_q[current_uncompressed_opcode_rs1]) || )
-                inst_buffer_dependency_d[inst_buffer_insert_index][i] = 1'b1;
-              end else if (inst_buffer_mem_access_addr_valid_q[i] && (inst_buffer_mem_access_addr_q[i] < 'h00100000 || inst_buffer_mem_access_addr_q[i] > 'h00200000)
-                && prefetch_buffer_rdata_mem_access_address_valid && (prefetch_buffer_rdata_mem_access_address < 'h00100000 || prefetch_buffer_rdata_mem_access_address > 'h00200000)) begin
-                inst_buffer_dependency_d[inst_buffer_insert_index][i] = 1'b1;
               end else if (prefetch_buffer_rdata_mem_access_address >= inst_buffer_mem_access_addr_q[i]  
                         && prefetch_buffer_rdata_mem_access_address < inst_buffer_mem_access_addr_q[i] + {29'd0, inst_buffer_mem_access_num_byte_q[i]}) begin  // Check the address for possible overlap. 
                 inst_buffer_dependency_d[inst_buffer_insert_index][i] = 1'b1;
-              end else if (prefetch_buffer_rdata_mem_access_address + {29'd0, prefetch_buffer_rdata_mem_access_num_byte} >= inst_buffer_mem_access_addr_q[i]  
-                        && prefetch_buffer_rdata_mem_access_address + {29'd0, prefetch_buffer_rdata_mem_access_num_byte} < inst_buffer_mem_access_addr_q[i] + {29'd0, inst_buffer_mem_access_num_byte_q[i]}) begin
+              end else if (prefetch_buffer_rdata_mem_access_address + {29'd0, prefetch_buffer_rdata_mem_access_num_byte} > inst_buffer_mem_access_addr_q[i]  
+                        && prefetch_buffer_rdata_mem_access_address + {29'd0, prefetch_buffer_rdata_mem_access_num_byte} <= inst_buffer_mem_access_addr_q[i] + {29'd0, inst_buffer_mem_access_num_byte_q[i]}) begin
                 inst_buffer_dependency_d[inst_buffer_insert_index][i] = 1'b1;
               end
             end
