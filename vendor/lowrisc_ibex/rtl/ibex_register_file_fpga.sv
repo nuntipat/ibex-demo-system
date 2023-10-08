@@ -28,18 +28,18 @@ module ibex_register_file_fpga #(
   input  logic                 dummy_instr_wb_i,
 
   //Read port R1
-  input  logic [ADDR_WIDTH-1:0] raddr_a_i,
-  output logic [DataWidth-1:0] rdata_a_o,
+  input  logic [ADDR_WIDTH-1:0] raddr_a_i /*verilator public_flat_rw*/,
+  output logic [DataWidth-1:0] rdata_a_o /*verilator public_flat_rw*/,
   //Read port R2
-  input  logic [ADDR_WIDTH-1:0] raddr_b_i,
-  output logic [DataWidth-1:0] rdata_b_o,
+  input  logic [ADDR_WIDTH-1:0] raddr_b_i /*verilator public_flat_rw*/,
+  output logic [DataWidth-1:0] rdata_b_o /*verilator public_flat_rw*/,
   //Read port R3
   input  logic [ADDR_WIDTH-1:0] raddr_c_i,
   output logic [DataWidth-1:0] rdata_c_o,
   // Write port W1
-  input  logic [ADDR_WIDTH-1:0] waddr_a_i,
-  input  logic [DataWidth-1:0] wdata_a_i,
-  input  logic                 we_a_i,
+  input  logic [ADDR_WIDTH-1:0] waddr_a_i /*verilator public_flat_rw*/,
+  input  logic [DataWidth-1:0] wdata_a_i /*verilator public_flat_rw*/,
+  input  logic                 we_a_i /*verilator public_flat_rw*/,
 
   // This indicates whether spurious WE are detected.
   output logic                 err_o

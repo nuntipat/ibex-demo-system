@@ -53,6 +53,8 @@ filesets:
       - dv/verilator/ibex_demo_system.h:  { file_type: cppSource, is_include_file: true}
       - dv/verilator/ibex_demo_system_uart_ext.cc: { file_type: cppSource }
       - dv/verilator/ibex_demo_system_uart_ext.h:  { file_type: cppSource, is_include_file: true}
+      - dv/verilator/ibex_demo_system_trace_ext.cc: { file_type: cppSource }
+      - dv/verilator/ibex_demo_system_trace_ext.h:  { file_type: cppSource, is_include_file: true}
       - dv/verilator/ibex_demo_system_main.cc: { file_type: cppSource }
       - dv/verilator/demo_system_verilator_lint.vlt:  { file_type: vlt }
 

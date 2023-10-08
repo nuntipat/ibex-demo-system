@@ -5,6 +5,7 @@
 #include "verilated_toplevel.h"
 #include "verilator_memutil.h"
 #include "ibex_demo_system_uart_ext.h"
+#include "ibex_demo_system_trace_ext.h"
 
 class DemoSystem {
  public:
@@ -17,6 +18,7 @@ class DemoSystem {
   ibex_demo_system _top;
   VerilatorMemUtil _memutil;
   MemArea _ram;
+  IbexTraceUtil _traceutil;
   IbexUartUtil _uartutil;
 
   virtual int Setup(int argc, char **argv, bool &exit_app);

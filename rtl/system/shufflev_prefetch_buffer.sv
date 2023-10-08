@@ -25,14 +25,14 @@ module shufflev_prefetch_buffer import ibex_pkg::*; #(
   input  logic        branch_i, // assert when the core want to change PC (branch, jump, exception, etc.)
   input  logic [31:0] addr_i,
 
-  input  logic        ready_i, 
-  output logic        valid_o,
+  input  logic        ready_i /*verilator public_flat_rw*/, 
+  output logic        valid_o /*verilator public_flat_rw*/, 
   output logic        is_compress_o,
-  output logic [31:0] rdata_o,
+  output logic [31:0] rdata_o /*verilator public_flat_rw*/,
   output logic [NumPhysicalRegsNumBits-1:0] rdata_rd_o,
   output logic [NumPhysicalRegsNumBits-1:0] rdata_rs1_o,
   output logic [NumPhysicalRegsNumBits-1:0] rdata_rs2_o,
-  output logic [31:0] addr_o,
+  output logic [31:0] addr_o /*verilator public_flat_rw*/,
   output logic        err_o,        
   output logic        err_plus2_o,  // error is caused by the second half of an unaligned uncompressed instruction
 
@@ -1013,7 +1013,7 @@ module shufflev_prefetch_buffer import ibex_pkg::*; #(
   /* Debugging signals */
 
   /* verilator lint_off UNUSEDSIGNAL */
-  logic [31:0] fetch_id_idex;
+  logic [31:0] fetch_id_idex /*verilator public_flat_rw*/; 
   /* verilator lint_off UNUSEDSIGNAL */
 
   if (EnableFetchId) begin
