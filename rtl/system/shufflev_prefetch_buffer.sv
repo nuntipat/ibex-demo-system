@@ -632,6 +632,7 @@ module shufflev_prefetch_buffer import ibex_pkg::*; #(
   logic [ShuffleBuffSize-1:0]                                 inst_buffer_mem_access_addr_valid_d, inst_buffer_mem_access_addr_valid_q; // indicate whether the target memory address is valid or not
   logic [ShuffleBuffSize-1:0] [31:0]                          inst_buffer_mem_access_addr_d, inst_buffer_mem_access_addr_q; // store the target memory address
   logic [ShuffleBuffSize-1:0] [2:0]                           inst_buffer_mem_access_num_byte_d, inst_buffer_mem_access_num_byte_q;   // 1 (lb, lbu, sb), 2 (lh, lhu, sh) or 4 (lw, sw) (valid only when inst_buffer_is_load_q/inst_buffer_is_store_q is asserted)
+  logic [ShuffleBuffSize-1:0] [11:0]                          inst_buffer_mem_access_offset;  // temporary signal directly wired to bits in inst_buffer_data_q
   logic [ShuffleBuffSize-1:0]                                 inst_buffer_is_env_csr_d, inst_buffer_is_env_csr_q;       // indicate whether this instruction is an environment/csr instruction (ecall/ebreak/csr.../wfi)
 
   logic [NumLogicalRegs-1:0] [NumPhysicalRegsNumBits-1:0] logical_to_physical_reg_d, logical_to_physical_reg_q; // store the mapping between logical to physical register (binary format)
@@ -674,6 +675,16 @@ module shufflev_prefetch_buffer import ibex_pkg::*; #(
         inst_buffer_mem_access_addr_valid_d[i] = inst_buffer_mem_access_addr_valid_q[i];
         inst_buffer_mem_access_addr_d[i] = inst_buffer_mem_access_addr_q[i];
         inst_buffer_mem_access_num_byte_d[i] = inst_buffer_mem_access_num_byte_q[i];
+        if (inst_buffer_is_load_q[i]) begin
+          inst_buffer_mem_access_offset[i] = inst_buffer_data_q[i][31:20];
+        end else begin
+          inst_buffer_mem_access_offset[i] = {inst_buffer_data_q[i][31:25], inst_buffer_data_q[i][11:7]};
+        end  
+      end else begin
+        inst_buffer_mem_access_addr_valid_d[i] = 'd0;
+        inst_buffer_mem_access_addr_d[i] = 'd0;
+        inst_buffer_mem_access_num_byte_d[i] = 'd0;
+        inst_buffer_mem_access_offset[i] = 'd0;
       end
       inst_buffer_is_env_csr_d[i] = inst_buffer_is_env_csr_q[i];
     end
@@ -729,8 +740,20 @@ module shufflev_prefetch_buffer import ibex_pkg::*; #(
           end
           if (EnableOptimizeMem) begin
             if ((inst_buffer_is_load_q[i] || inst_buffer_is_store_q[i]) && (prefetch_buffer_rdata_load || prefetch_buffer_rdata_store)) begin
-              if (!inst_buffer_mem_access_addr_valid_q[i] || !prefetch_buffer_rdata_mem_access_address_valid) begin // Assume dependency exist if the address hasn't been resolved
-                inst_buffer_dependency_d[inst_buffer_insert_index][i] = 1'b1;
+              if (!inst_buffer_mem_access_addr_valid_q[i] || !prefetch_buffer_rdata_mem_access_address_valid) begin // One of the address may be invalid
+                if (inst_buffer_rs1_physical_q[i] != logical_to_physical_reg_q[current_uncompressed_opcode_rs1]) begin  // Assume dependency exist if rs1 doesn't match
+                  inst_buffer_dependency_d[inst_buffer_insert_index][i] = 1'b1;
+                end else begin
+                  // If rs1 matches and address overlap, dependency exists
+                  if (((prefetch_buffer_rdata_mem_access_offset[11:0] >= inst_buffer_mem_access_offset[i]) 
+                      && (prefetch_buffer_rdata_mem_access_offset[11:0] < inst_buffer_mem_access_offset[i] + {9'd0, inst_buffer_mem_access_num_byte_q[i]}))
+                    || ((prefetch_buffer_rdata_mem_access_offset[11:0] + {9'd0, prefetch_buffer_rdata_mem_access_num_byte} > inst_buffer_mem_access_offset[i]) 
+                      && (prefetch_buffer_rdata_mem_access_offset[11:0] + {9'd0, prefetch_buffer_rdata_mem_access_num_byte} <= inst_buffer_mem_access_offset[i] + {9'd0, inst_buffer_mem_access_num_byte_q[i]}))) begin
+                    inst_buffer_dependency_d[inst_buffer_insert_index][i] = 1'b1;
+                  end else begin // dependency doesn't exist when rs1 matches but address doesn't overlap
+                    // do nothing
+                  end
+                end
               end else if (inst_buffer_mem_access_addr_valid_q[i] && (inst_buffer_mem_access_addr_q[i] < 'h100000 || inst_buffer_mem_access_addr_q[i] > 'h200000)
                 && prefetch_buffer_rdata_mem_access_address_valid && (prefetch_buffer_rdata_mem_access_address < 'h100000 || prefetch_buffer_rdata_mem_access_address > 'h200000)) begin  // Memory-mapped IO should be done sequentially
                 inst_buffer_dependency_d[inst_buffer_insert_index][i] = 1'b1;
