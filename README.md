@@ -1,4 +1,6 @@
-# Ibex Demo System
+# ShuffleV Demo System
+
+This repository contains a fork of the Ibex Demo System, with the Ibex core replaced by the ShuffleV core and support for the PYNQ-Z2 FPGA board added.
 
 ![Ibex demo system block diagram](doc/IbexDemoSystemBlockDiagram.png "Ibex Demo System Block Diagram")
 
